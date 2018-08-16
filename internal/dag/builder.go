@@ -366,16 +366,17 @@ func (b *Builder) compute() *DAG {
 			// attach secrets to TLS enabled vhosts
 			m := meta{name: tls.SecretName, namespace: ir.Namespace}
 			if sec := secret(m); sec != nil {
-				svhost(host, 443).secret = sec
-				svhost(host, 443).MinProtoVersion = auth.TlsParameters_TLSv1_1 // TODO(dfc) issue 467
+				svhost(host, ir.Spec.VirtualHost.Port).secret = sec
+				svhost(host, ir.Spec.VirtualHost.Port).MinProtoVersion = auth.TlsParameters_TLSv1_1 // TODO(dfc) issue 467
 			}
 		}
 
 		prefixMatch := ""
 		irp := ingressRouteProcessor{
 			host:          host,
+			port:          ir.Spec.VirtualHost.Port,
 			service:       service,
-			vhost:         vhost,
+			vhost:         svhost,
 			ingressroutes: b.ingressroutes,
 			orphaned:      orphaned,
 		}
@@ -418,8 +419,9 @@ func (b *Builder) rootAllowed(ir *ingressroutev1.IngressRoute) bool {
 
 type ingressRouteProcessor struct {
 	host          string
+	port          int
 	service       func(m meta, port intstr.IntOrString) *Service
-	vhost         func(host string, port int) *VirtualHost
+	vhost         func(host string, port int) *SecureVirtualHost
 	ingressroutes map[meta]*ingressroutev1.IngressRoute
 	orphaned      map[meta]bool
 }
@@ -454,7 +456,7 @@ func (irp *ingressRouteProcessor) process(ir *ingressroutev1.IngressRoute, prefi
 					r.addService(svc, s.HealthCheck, s.Strategy, s.Weight)
 				}
 			}
-			irp.vhost(irp.host, 80).routes[r.path] = r
+			irp.vhost(irp.host, irp.port).routes[r.path] = r
 			continue
 		}
 

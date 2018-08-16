@@ -21,7 +21,11 @@ spec:
    name: https
    protocol: TCP
    targetPort: 8443
+ - port: 104
+   name: dicom
+   protocol: TCP
+   targetPort: 104
  selector:
    app: contour
- type: LoadBalancer
+ type: NodePort
 ---

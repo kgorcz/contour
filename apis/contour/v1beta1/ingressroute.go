@@ -38,7 +38,8 @@ type VirtualHost struct {
 	// If present describes tls properties. The CNI names that will be matched on
 	// are described in fqdn and aliases, the tls.secretName secret must contain a
 	// matching certificate
-	TLS *TLS `json:"tls"`
+	TLS  *TLS `json:"tls"`
+	Port int  `json:"port"`
 }
 
 // TLS describes tls properties. The CNI names that will be matched on

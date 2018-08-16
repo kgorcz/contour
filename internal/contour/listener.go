@@ -14,7 +14,10 @@
 package contour
 
 import (
+	"strconv"
 	"sync"
+
+	"github.com/sirupsen/logrus"
 
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/auth"
@@ -197,6 +200,7 @@ type listenerVisitor struct {
 func (v *listenerVisitor) Visit() map[string]*v2.Listener {
 	m := make(map[string]*v2.Listener)
 	http := 0
+	tcp := make(map[int]*dag.SecureVirtualHost)
 	ingress_https := v2.Listener{
 		Name:    ENVOY_HTTPS_LISTENER,
 		Address: socketaddress(v.httpsAddress(), v.httpsPort()),
@@ -217,17 +221,23 @@ func (v *listenerVisitor) Visit() map[string]*v2.Listener {
 				// no secret for this vhost, skip it
 				return
 			}
-			fc := listener.FilterChain{
-				FilterChainMatch: &listener.FilterChainMatch{
-					SniDomains: []string{vh.FQDN()},
-				},
-				TlsContext: tlscontext(data, vh.MinProtoVersion, "h2", "http/1.1"),
-				Filters:    filters,
+			if vh.Port == 443 {
+				logrus.Info("Creating 443 virtual host", vh.FQDN())
+				fc := listener.FilterChain{
+					FilterChainMatch: &listener.FilterChainMatch{
+						SniDomains: []string{vh.FQDN()},
+					},
+					TlsContext: tlscontext(data, vh.MinProtoVersion, "h2", "http/1.1"),
+					Filters:    filters,
+				}
+				if v.UseProxyProto {
+					fc.UseProxyProto = &types.BoolValue{Value: true}
+				}
+				ingress_https.FilterChains = append(ingress_https.FilterChains, fc)
+			} else {
+				logrus.Info("TCP port virtual host: ", vh.FQDN(), " | ", vh.Port)
+				tcp[vh.Port] = vh
 			}
-			if v.UseProxyProto {
-				fc.UseProxyProto = &types.BoolValue{Value: true}
-			}
-			ingress_https.FilterChains = append(ingress_https.FilterChains, fc)
 		}
 	})
 	if http > 0 {
@@ -241,6 +251,57 @@ func (v *listenerVisitor) Visit() map[string]*v2.Listener {
 	}
 	if len(ingress_https.FilterChains) > 0 {
 		m[ENVOY_HTTPS_LISTENER] = &ingress_https
+	}
+	// TODO:
+	// - where does m get returned to and is it expecting > 2?
+	// - how do secrets get matched to virtual hosts?
+	// - try without tls first
+	if len(tcp) > 0 {
+		logrus.Info("Found ", len(tcp), " tcp virtual hosts")
+		for _, svh := range tcp {
+			logrus.Info("Configuring tcp virtual host ", svh.FQDN())
+			var svcs []*dag.Service
+			svh.Visit(func(r dag.Vertex) {
+				switch r := r.(type) {
+				case *dag.Route:
+					r.Visit(func(s dag.Vertex) {
+						if s, ok := s.(*dag.Service); ok {
+							svcs = append(svcs, s)
+						}
+					})
+				case *dag.Secret:
+					logrus.Info("Visited secret ", r.Namespace(), ": ", r.Name())
+				}
+			})
+			if len(svcs) != 1 {
+				// no services for this route, skip it.
+				logrus.Error("TCP virtual host ", svh.FQDN(), " did not have any services")
+				continue
+			}
+			svc := svcs[0]
+			name := "ingress_tcp_port_" + strconv.Itoa(svh.Port)
+			m[name] = &v2.Listener{
+				Name:    name,
+				Address: socketaddress("0.0.0.0", uint32(svh.Port)),
+				FilterChains: []listener.FilterChain{
+					listener.FilterChain{
+						TlsContext: tlscontext(svh.Data(), svh.MinProtoVersion),
+						Filters: []listener.Filter{
+							listener.Filter{
+								Name: "envoy.tcp_proxy",
+								Config: &types.Struct{
+									Fields: map[string]*types.Value{
+										"stat_prefix": sv(name),
+										"cluster":     sv(hashname(60, svc.Namespace(), svc.Name(), strconv.Itoa(int(svc.Port)))),
+										"access_log":  accesslog(v.httpsAccessLog()),
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+		}
 	}
 	return m
 }

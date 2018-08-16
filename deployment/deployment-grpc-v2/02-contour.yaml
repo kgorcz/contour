@@ -9,7 +9,7 @@ spec:
   selector:
     matchLabels:
       app: contour
-  replicas: 2
+  replicas: 1
   template:
     metadata:
       labels:
@@ -21,8 +21,8 @@ spec:
         prometheus.io/format: "prometheus"
     spec:
       containers:
-      - image: gcr.io/heptio-images/contour:master
-        imagePullPolicy: Always
+      - image: mycontour:5
+        imagePullPolicy: IfNotPresent
         name: contour
         command: ["contour"]
         args: ["serve", "--incluster"]
@@ -33,6 +33,8 @@ spec:
           name: http
         - containerPort: 8443
           name: https
+        - containerPort: 104
+          name: dicom
         command: ["envoy"]
         args:
         - --config-path /config/contour.yaml
@@ -44,8 +46,8 @@ spec:
         - name: contour-config
           mountPath: /config
       initContainers:
-      - image: gcr.io/heptio-images/contour:master
-        imagePullPolicy: Always
+      - image: mycontour:5
+        imagePullPolicy: IfNotPresent
         name: envoy-initconfig
         command: ["contour"]
         args: ["bootstrap", "/config/contour.yaml"]
