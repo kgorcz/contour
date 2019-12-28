@@ -70,7 +70,7 @@ func (c *routeCache) Update(v map[string]*v2.RouteConfiguration) {
 	c.notify()
 }
 
-// notify notifies all registered waiters that an event has occured.
+// notify notifies all registered waiters that an event has occurred.
 func (c *routeCache) notify() {
 	c.last++
 
@@ -113,9 +113,13 @@ func (v *routeVisitor) Visit() map[string]*v2.RouteConfiguration {
 		switch vh := vh.(type) {
 		case *dag.VirtualHost:
 			hostname := vh.FQDN()
-			domains := []string{hostname}
+			aliases := vh.Aliases()
+			domains := append(aliases, hostname)
 			if hostname != "*" {
 				domains = append(domains, hostname+":80")
+				for _, a := range aliases {
+					domains = append(domains, a+":80")
+				}
 			}
 			vhost := route.VirtualHost{
 				Name:    hashname(60, hostname),
@@ -159,9 +163,13 @@ func (v *routeVisitor) Visit() map[string]*v2.RouteConfiguration {
 			ingress_http.VirtualHosts = append(ingress_http.VirtualHosts, vhost)
 		case *dag.SecureVirtualHost:
 			hostname := vh.FQDN()
-			domains := []string{hostname}
+			aliases := vh.Aliases()
+			domains := append(aliases, hostname)
 			if hostname != "*" {
 				domains = append(domains, hostname+":443")
+				for _, a := range aliases {
+					domains = append(domains, a+":443")
+				}
 			}
 			vhost := route.VirtualHost{
 				Name:    hashname(60, hostname),
@@ -241,45 +249,27 @@ func prefixmatch(prefix string) route.RouteMatch {
 // action computes the cluster route action, a *route.Route_route for the
 // supplied ingress and backend.
 func actionroute(services []*dag.Service, ws bool, timeout time.Duration) *route.Route_Route {
-	var totalWeight int
-	upstreams := []*route.WeightedCluster_ClusterWeight{}
-
-	// Loop over all the upstreams and add to slice
-	for _, svc := range services {
-		// Create the upstream
-		upstreams = append(upstreams, &route.WeightedCluster_ClusterWeight{
-			Name:   hashname(60, svc.Namespace(), svc.Name(), strconv.Itoa(int(svc.Port))),
-			Weight: &types.UInt32Value{Value: uint32(svc.Weight)},
-		})
-		totalWeight += svc.Weight
-	}
-
-	// sort upstreams by name to keep the list stable
-	sort.Stable(clusterWeightByName(upstreams))
-
-	// Check if no weights were defined, if not default to even distribution
-	if totalWeight == 0 {
-		for _, u := range upstreams {
-			u.Weight.Value = 1
-		}
-		totalWeight = len(services)
-	}
-
 	rr := route.Route_Route{
 		Route: &route.RouteAction{
 			ClusterSpecifier: &route.RouteAction_WeightedClusters{
-				WeightedClusters: &route.WeightedCluster{
-					Clusters: upstreams,
-					TotalWeight: &types.UInt32Value{
-						Value: uint32(totalWeight),
-					},
-				},
+				WeightedClusters: weightedclusters(services),
 			},
 		},
 	}
+
+	// Check if no weights were defined, if not default to even distribution
+	clusters := rr.Route.ClusterSpecifier.(*route.RouteAction_WeightedClusters).WeightedClusters
+	if clusters.TotalWeight.Value == 0 {
+		for _, c := range clusters.Clusters {
+			c.Weight.Value = 1
+		}
+		clusters.TotalWeight.Value = uint32(len(clusters.Clusters))
+	}
+
 	if ws {
 		rr.Route.UseWebsocket = &types.BoolValue{Value: ws}
 	}
+
 	switch timeout {
 	case 0:
 		// no timeout specified, do nothing
@@ -295,11 +285,34 @@ func actionroute(services []*dag.Service, ws bool, timeout time.Duration) *route
 	return &rr
 }
 
+func weightedclusters(services []*dag.Service) *route.WeightedCluster {
+	var wc route.WeightedCluster
+	var total int
+	for _, svc := range services {
+		total += svc.Weight
+		wc.Clusters = append(wc.Clusters, &route.WeightedCluster_ClusterWeight{
+			Name:   hashname(60, svc.Namespace(), svc.Name(), strconv.Itoa(int(svc.Port))),
+			Weight: &types.UInt32Value{Value: uint32(svc.Weight)},
+		})
+	}
+	wc.TotalWeight = &types.UInt32Value{
+		Value: uint32(total),
+	}
+	sort.Stable(clusterWeightByName(wc.Clusters))
+	return &wc
+}
+
 type clusterWeightByName []*route.WeightedCluster_ClusterWeight
 
-func (c clusterWeightByName) Len() int           { return len(c) }
-func (c clusterWeightByName) Swap(i, j int)      { c[i], c[j] = c[j], c[i] }
-func (c clusterWeightByName) Less(i, j int) bool { return c[i].Name < c[j].Name }
+func (c clusterWeightByName) Len() int      { return len(c) }
+func (c clusterWeightByName) Swap(i, j int) { c[i], c[j] = c[j], c[i] }
+func (c clusterWeightByName) Less(i, j int) bool {
+	if c[i].Name == c[j].Name {
+		return c[i].Weight.Value < c[j].Weight.Value
+	}
+	return c[i].Name < c[j].Name
+
+}
 
 // hashname takes a lenth l and a varargs of strings s and returns a string whose length
 // which does not exceed l. Internally s is joined with strings.Join(s, "/"). If the

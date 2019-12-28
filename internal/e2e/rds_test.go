@@ -998,7 +998,7 @@ func TestRDSFilter(t *testing.T) {
 	}, streamRDS(t, cc, "ingress_https"))
 }
 
-func TestWebsocketRoutes(t *testing.T) {
+func TestWebsocketIngress(t *testing.T) {
 	rh, cc, done := setup(t)
 	defer done()
 
@@ -1048,6 +1048,71 @@ func TestWebsocketRoutes(t *testing.T) {
 		Routes: []route.Route{{
 			Match:  prefixmatch("/"), // match all
 			Action: websocketroute("default/ws/80"),
+		}},
+	}}, nil)
+}
+
+func TestWebsocketIngressRoute(t *testing.T) {
+	rh, cc, done := setup(t)
+	defer done()
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ws",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       80,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	rh.OnAdd(&ingressroutev1.IngressRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: ingressroutev1.IngressRouteSpec{
+			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "websocket.hello.world"},
+			Routes: []ingressroutev1.Route{{
+				Match: "/",
+				Services: []ingressroutev1.Service{{
+					Name: "ws",
+					Port: 80,
+				}},
+			}, {
+				Match:            "/ws-1",
+				EnableWebsockets: true,
+				Services: []ingressroutev1.Service{{
+					Name: "ws",
+					Port: 80,
+				}},
+			}, {
+				Match:            "/ws-2",
+				EnableWebsockets: true,
+				Services: []ingressroutev1.Service{{
+					Name: "ws",
+					Port: 80,
+				}},
+			}},
+		},
+	})
+
+	assertRDS(t, cc, []route.VirtualHost{{
+		Name:    "websocket.hello.world",
+		Domains: []string{"websocket.hello.world", "websocket.hello.world:80"},
+		Routes: []route.Route{{
+			Match:  prefixmatch("/ws-2"),
+			Action: websocketroute("default/ws/80"),
+		}, {
+			Match:  prefixmatch("/ws-1"),
+			Action: websocketroute("default/ws/80"),
+		}, {
+			Match:  prefixmatch("/"), // match all
+			Action: routecluster("default/ws/80"),
 		}},
 	}}, nil)
 }
@@ -1153,6 +1218,76 @@ func TestDefaultBackendDoesNotOverwriteNamedHost(t *testing.T) {
 					Routes: []route.Route{{
 						Match:  prefixmatch("/"),
 						Action: routecluster("default/test-gui/80"),
+					}},
+				}},
+			}),
+		},
+		TypeUrl: routeType,
+		Nonce:   "0",
+	}, streamRDS(t, cc, "ingress_http"))
+}
+
+func TestRDSIngressRouteWithAliases(t *testing.T) {
+	rh, cc, done := setup(t, func(reh *contour.ResourceEventHandler) {
+		reh.IngressRouteRootNamespaces = []string{"roots"}
+		reh.Notifier.(*contour.CacheHandler).IngressRouteStatus = &k8s.IngressRouteStatus{
+			Client: fake.NewSimpleClientset(),
+		}
+	})
+	defer done()
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "roots",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       8080,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	// ir1 is an ingressroute that is in the root namespaces
+	ir1 := &ingressroutev1.IngressRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "roots",
+		},
+		Spec: ingressroutev1.IngressRouteSpec{
+			VirtualHost: &ingressroutev1.VirtualHost{
+				Fqdn: "example.com",
+				Aliases: []string{
+					"foo.com",
+					"bar.com",
+				},
+			},
+			Routes: []ingressroutev1.Route{{
+				Match: "/",
+				Services: []ingressroutev1.Service{{
+					Name: "kuard",
+					Port: 8080,
+				}},
+			}},
+		},
+	}
+
+	// add ingressroute
+	rh.OnAdd(ir1)
+
+	assertEqual(t, &v2.DiscoveryResponse{
+		VersionInfo: "0",
+		Resources: []types.Any{
+			any(t, &v2.RouteConfiguration{
+				Name: "ingress_http",
+				VirtualHosts: []route.VirtualHost{{
+					Name:    "example.com",
+					Domains: []string{"foo.com", "bar.com", "example.com", "example.com:80", "foo.com:80", "bar.com:80"},
+					Routes: []route.Route{{
+						Match:  prefixmatch("/"),
+						Action: routecluster("roots/kuard/8080"),
 					}},
 				}},
 			}),
@@ -1430,6 +1565,162 @@ func TestRDSAssertNoDataRaceDuringInsertAndStream(t *testing.T) {
 	}
 }
 
+// issue 606: spec.rules.host without a http key causes panic.
+// apiVersion: extensions/v1beta1
+// kind: Ingress
+// metadata:
+//   name: test-ingress3
+// spec:
+//   rules:
+//   - host: test1.test.com
+//   - host: test2.test.com
+//     http:
+//       paths:
+//       - backend:
+//           serviceName: network-test
+//           servicePort: 9001
+//         path: /
+//
+// note: this test caused a panic in dag.Builder, but testing the
+// context of RDS is a good place to start.
+func TestRDSIngressSpecMissingHTTPKey(t *testing.T) {
+	rh, cc, done := setup(t)
+	defer done()
+
+	i1 := &v1beta1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingress3",
+			Namespace: "default",
+		},
+		Spec: v1beta1.IngressSpec{
+			Rules: []v1beta1.IngressRule{{
+				Host: "test1.test.com",
+			}, {
+				Host: "test2.test.com",
+				IngressRuleValue: v1beta1.IngressRuleValue{
+					HTTP: &v1beta1.HTTPIngressRuleValue{
+						Paths: []v1beta1.HTTPIngressPath{{
+							Path: "/",
+							Backend: v1beta1.IngressBackend{
+								ServiceName: "network-test",
+								ServicePort: intstr.FromInt(9001),
+							},
+						}},
+					},
+				},
+			}},
+		},
+	}
+	rh.OnAdd(i1)
+
+	s1 := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "network-test",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:       "http",
+				Protocol:   "TCP",
+				Port:       9001,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	}
+	rh.OnAdd(s1)
+
+	assertRDS(t, cc, []route.VirtualHost{{
+		Name:    "test2.test.com",
+		Domains: []string{"test2.test.com", "test2.test.com:80"},
+		Routes: []route.Route{{
+			Match:  prefixmatch("/"), // match all
+			Action: routecluster("default/network-test/9001"),
+		}},
+	}}, nil)
+}
+
+func TestRouteWithAServiceWeight(t *testing.T) {
+	rh, cc, done := setup(t)
+	defer done()
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       80,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	ir1 := &ingressroutev1.IngressRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: ingressroutev1.IngressRouteSpec{
+			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "test2.test.com"},
+			Routes: []ingressroutev1.Route{{
+				Match: "/a",
+				Services: []ingressroutev1.Service{{
+					Name:   "kuard",
+					Port:   80,
+					Weight: 90,
+				}},
+			}},
+		},
+	}
+
+	rh.OnAdd(ir1)
+	assertRDS(t, cc, []route.VirtualHost{{
+		Name:    "test2.test.com",
+		Domains: []string{"test2.test.com", "test2.test.com:80"},
+		Routes: []route.Route{{
+			Match:  prefixmatch("/a"), // match all
+			Action: routeweightedcluster(weightedcluster{"default/kuard/80", 90}),
+		}},
+	}}, nil)
+
+	ir2 := &ingressroutev1.IngressRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: ingressroutev1.IngressRouteSpec{
+			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "test2.test.com"},
+			Routes: []ingressroutev1.Route{{
+				Match: "/a",
+				Services: []ingressroutev1.Service{{
+					Name:   "kuard",
+					Port:   80,
+					Weight: 90,
+				}, {
+					Name:   "kuard",
+					Port:   80,
+					Weight: 60,
+				}},
+			}},
+		},
+	}
+
+	rh.OnUpdate(ir1, ir2)
+	assertRDS(t, cc, []route.VirtualHost{{
+		Name:    "test2.test.com",
+		Domains: []string{"test2.test.com", "test2.test.com:80"},
+		Routes: []route.Route{{
+			Match: prefixmatch("/a"), // match all
+			Action: routeweightedcluster(
+				weightedcluster{"default/kuard/80", 60},
+				weightedcluster{"default/kuard/80", 90},
+			),
+		}},
+	}}, nil)
+}
+
 func assertRDS(t *testing.T, cc *grpc.ClientConn, ingress_http, ingress_https []route.VirtualHost) {
 	t.Helper()
 	assertEqual(t, &v2.DiscoveryResponse{
@@ -1473,22 +1764,39 @@ func prefixmatch(prefix string) route.RouteMatch {
 	}
 }
 
+type weightedcluster struct {
+	name   string
+	weight uint32
+}
+
 func routecluster(cluster string) *route.Route_Route {
+	return routeweightedcluster(weightedcluster{cluster, 1})
+}
+
+func routeweightedcluster(first weightedcluster, rest ...weightedcluster) *route.Route_Route {
 	return &route.Route_Route{
 		Route: &route.RouteAction{
 			ClusterSpecifier: &route.RouteAction_WeightedClusters{
-				WeightedClusters: &route.WeightedCluster{
-					Clusters: []*route.WeightedCluster_ClusterWeight{{
-						Name:   cluster,
-						Weight: &types.UInt32Value{Value: uint32(1)},
-					}},
-					TotalWeight: &types.UInt32Value{
-						Value: uint32(1),
-					},
-				},
+				WeightedClusters: weightedclusters(append([]weightedcluster{first}, rest...)),
 			},
 		},
 	}
+}
+
+func weightedclusters(clusters []weightedcluster) *route.WeightedCluster {
+	var wc route.WeightedCluster
+	total := uint32(0)
+	for _, c := range clusters {
+		total += c.weight
+		wc.Clusters = append(wc.Clusters, &route.WeightedCluster_ClusterWeight{
+			Name:   c.name,
+			Weight: &types.UInt32Value{Value: c.weight},
+		})
+	}
+	wc.TotalWeight = &types.UInt32Value{
+		Value: total,
+	}
+	return &wc
 }
 
 func websocketroute(c string) *route.Route_Route {

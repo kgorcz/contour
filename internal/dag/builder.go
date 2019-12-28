@@ -17,6 +17,7 @@ package dag
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,15 +31,15 @@ import (
 	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
 )
 
-// A Builder holds Kubernetes objects and associated configuration and produces
+// A KubernetesCache holds Kubernetes objects and associated configuration and produces
 // DAG values.
-type Builder struct {
+type KubernetesCache struct {
 	// IngressRouteRootNamespaces specifies the namespaces where root
 	// IngressRoutes can be defined. If empty, roots can be defined in any
 	// namespace.
 	IngressRouteRootNamespaces []string
 
-	mu sync.Mutex
+	mu sync.RWMutex
 
 	ingresses     map[meta]*v1beta1.Ingress
 	ingressroutes map[meta]*ingressroutev1.IngressRoute
@@ -57,118 +58,126 @@ const (
 	StatusOrphaned = "orphaned"
 )
 
-// Insert inserts obj into the Builder.
+// Insert inserts obj into the KubernetesCache.
 // If an object with a matching type, name, and namespace exists, it will be overwritten.
-func (b *Builder) Insert(obj interface{}) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+func (kc *KubernetesCache) Insert(obj interface{}) {
+	kc.mu.Lock()
+	defer kc.mu.Unlock()
 	switch obj := obj.(type) {
 	case *v1.Secret:
 		m := meta{name: obj.Name, namespace: obj.Namespace}
-		if b.secrets == nil {
-			b.secrets = make(map[meta]*v1.Secret)
+		if kc.secrets == nil {
+			kc.secrets = make(map[meta]*v1.Secret)
 		}
-		b.secrets[m] = obj
+		kc.secrets[m] = obj
 	case *v1.Service:
 		m := meta{name: obj.Name, namespace: obj.Namespace}
-		if b.services == nil {
-			b.services = make(map[meta]*v1.Service)
+		if kc.services == nil {
+			kc.services = make(map[meta]*v1.Service)
 		}
-		b.services[m] = obj
+		kc.services[m] = obj
 	case *v1beta1.Ingress:
 		m := meta{name: obj.Name, namespace: obj.Namespace}
-		if b.ingresses == nil {
-			b.ingresses = make(map[meta]*v1beta1.Ingress)
+		if kc.ingresses == nil {
+			kc.ingresses = make(map[meta]*v1beta1.Ingress)
 		}
-		b.ingresses[m] = obj
+		kc.ingresses[m] = obj
 	case *ingressroutev1.IngressRoute:
 		m := meta{name: obj.Name, namespace: obj.Namespace}
-		if b.ingressroutes == nil {
-			b.ingressroutes = make(map[meta]*ingressroutev1.IngressRoute)
+		if kc.ingressroutes == nil {
+			kc.ingressroutes = make(map[meta]*ingressroutev1.IngressRoute)
 		}
-		b.ingressroutes[m] = obj
+		kc.ingressroutes[m] = obj
 	default:
 		// not an interesting object
 	}
 }
 
-// Remove removes obj from the Builder.
+// Remove removes obj from the KubernetesCache.
 // If no object with a matching type, name, and namespace exists in the DAG, no action is taken.
-func (b *Builder) Remove(obj interface{}) {
+func (kc *KubernetesCache) Remove(obj interface{}) {
 	switch obj := obj.(type) {
 	default:
-		b.remove(obj)
+		kc.remove(obj)
 	case cache.DeletedFinalStateUnknown:
-		b.Remove(obj.Obj) // recurse into ourselves with the tombstoned value
+		kc.Remove(obj.Obj) // recurse into ourselves with the tombstoned value
 	}
 }
 
-func (b *Builder) remove(obj interface{}) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+func (kc *KubernetesCache) remove(obj interface{}) {
+	kc.mu.Lock()
+	defer kc.mu.Unlock()
 	switch obj := obj.(type) {
 	case *v1.Secret:
 		m := meta{name: obj.Name, namespace: obj.Namespace}
-		delete(b.secrets, m)
+		delete(kc.secrets, m)
 	case *v1.Service:
 		m := meta{name: obj.Name, namespace: obj.Namespace}
-		delete(b.services, m)
+		delete(kc.services, m)
 	case *v1beta1.Ingress:
 		m := meta{name: obj.Name, namespace: obj.Namespace}
-		delete(b.ingresses, m)
+		delete(kc.ingresses, m)
 	case *ingressroutev1.IngressRoute:
 		m := meta{name: obj.Name, namespace: obj.Namespace}
-		delete(b.ingressroutes, m)
+		delete(kc.ingressroutes, m)
 	default:
 		// not interesting
 	}
 }
 
-// Compute computes a new DAG value.
-func (b *Builder) Compute() *DAG {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.compute()
+// A Builder builds a *DAGs
+type Builder struct {
+	KubernetesCache
 }
 
-// serviceMap memoise access to a service map, built
-// as needed from the list of services cached
-// from k8s.
-type serviceMap struct {
-	// backing services from k8s api.
-	services map[meta]*v1.Service
-
-	// cached Services.
-	_services map[portmeta]*Service
+// Build builds a new *DAG.
+func (b *Builder) Build() *DAG {
+	builder := &builder{source: b}
+	return builder.compute()
 }
 
-// lookup returns a Service that matches the meta and port supplied.
+// A builder holds the state of one invocation of Builder.Build.
+// Once used, the builder should be discarded.
+type builder struct {
+	source *Builder
+
+	services map[servicemeta]*Service
+	secrets  map[meta]*Secret
+	vhosts   map[hostport]*VirtualHost
+	svhosts  map[hostport]*SecureVirtualHost
+
+	orphaned map[meta]bool
+
+	statuses []Status
+}
+
+// lookupService returns a Service that matches the meta and port supplied.
 // If no matching Service is found lookup returns nil.
-func (sm *serviceMap) lookup(m meta, port intstr.IntOrString) *Service {
+func (b *builder) lookupService(m meta, port intstr.IntOrString, weight int) *Service {
 	if port.Type == intstr.Int {
-		if s, ok := sm._services[portmeta{name: m.name, namespace: m.namespace, port: int32(port.IntValue())}]; ok {
+		if s, ok := b.services[servicemeta{name: m.name, namespace: m.namespace, port: int32(port.IntValue()), weight: weight}]; ok {
 			return s
 		}
 	}
-	svc, ok := sm.services[m]
+	svc, ok := b.source.services[m]
 	if !ok {
 		return nil
 	}
 	for i := range svc.Spec.Ports {
 		p := &svc.Spec.Ports[i]
 		if int(p.Port) == port.IntValue() {
-			return sm.insert(svc, p)
+			return b.addService(svc, p, weight)
 		}
 		if port.String() == p.Name {
-			return sm.insert(svc, p)
+			return b.addService(svc, p, weight)
 		}
 	}
 	return nil
 }
 
-func (sm *serviceMap) insert(svc *v1.Service, port *v1.ServicePort) *Service {
-	if sm._services == nil {
-		sm._services = make(map[portmeta]*Service)
+func (b *builder) addService(svc *v1.Service, port *v1.ServicePort, weight int) *Service {
+	if b.services == nil {
+		b.services = make(map[servicemeta]*Service)
 	}
 	up := parseUpstreamProtocols(svc.Annotations, annotationUpstreamProtocol, "h2", "h2c")
 	protocol := up[port.Name]
@@ -180,96 +189,95 @@ func (sm *serviceMap) insert(svc *v1.Service, port *v1.ServicePort) *Service {
 		Object:      svc,
 		ServicePort: port,
 		Protocol:    protocol,
+		Weight:      weight,
 
 		MaxConnections:     parseAnnotation(svc.Annotations, annotationMaxConnections),
 		MaxPendingRequests: parseAnnotation(svc.Annotations, annotationMaxPendingRequests),
 		MaxRequests:        parseAnnotation(svc.Annotations, annotationMaxRequests),
 		MaxRetries:         parseAnnotation(svc.Annotations, annotationMaxRetries),
 	}
-	sm._services[s.toMeta()] = s
+	b.services[s.toMeta()] = s
 	return s
 }
 
-// compute builds a new *DAG
-func (b *Builder) compute() *DAG {
-	sm := serviceMap{
-		services: b.services,
-	}
-	service := sm.lookup
-
-	// memoise access to a secrets map, built
-	// as needed from the list of secrets cached
-	// from k8s.
-	_secrets := make(map[meta]*Secret)
-	secret := func(m meta) *Secret {
-		if s, ok := _secrets[m]; ok {
-			return s
-		}
-		sec, ok := b.secrets[m]
-		if !ok {
-			return nil
-		}
-		s := &Secret{
-			object: sec,
-		}
-		_secrets[s.toMeta()] = s
+func (b *builder) lookupSecret(m meta) *Secret {
+	if s, ok := b.secrets[m]; ok {
 		return s
 	}
-
-	type hostport struct {
-		host string
-		port int
+	sec, ok := b.source.secrets[m]
+	if !ok {
+		return nil
 	}
+	s := &Secret{
+		object: sec,
+	}
+	if b.secrets == nil {
+		b.secrets = make(map[meta]*Secret)
+	}
+	b.secrets[s.toMeta()] = s
+	return s
+}
 
-	// memoise the production of vhost entries as needed.
-	_vhosts := make(map[hostport]*VirtualHost)
-	vhost := func(host string, port int) *VirtualHost {
-		hp := hostport{host: host, port: port}
-		vh, ok := _vhosts[hp]
-		if !ok {
-			vh = &VirtualHost{
-				Port:   port,
-				host:   host,
-				routes: make(map[string]*Route),
-			}
-			_vhosts[hp] = vh
+func (b *builder) lookupVirtualHost(host string, port int) *VirtualHost {
+	hp := hostport{host: host, port: port}
+	vh, ok := b.vhosts[hp]
+	if !ok {
+		vh = &VirtualHost{
+			Port: port,
+			host: host,
 		}
-		return vh
-	}
-
-	_svhosts := make(map[hostport]*SecureVirtualHost)
-	svhost := func(host string, port int) *SecureVirtualHost {
-		hp := hostport{host: host, port: port}
-		svh, ok := _svhosts[hp]
-		if !ok {
-			svh = &SecureVirtualHost{
-				Port:   port,
-				host:   host,
-				routes: make(map[string]*Route),
-			}
-			_svhosts[hp] = svh
+		if b.vhosts == nil {
+			b.vhosts = make(map[hostport]*VirtualHost)
 		}
-		return svh
+		b.vhosts[hp] = vh
 	}
+	return vh
+}
+
+func (b *builder) lookupSecureVirtualHost(host string, port int) *SecureVirtualHost {
+	hp := hostport{host: host, port: port}
+	svh, ok := b.svhosts[hp]
+	if !ok {
+		svh = &SecureVirtualHost{
+			Port: port,
+			host: host,
+		}
+		if b.svhosts == nil {
+			b.svhosts = make(map[hostport]*SecureVirtualHost)
+		}
+		b.svhosts[hp] = svh
+	}
+	return svh
+}
+
+type hostport struct {
+	host string
+	port int
+}
+
+func (b *builder) compute() *DAG {
+	b.source.KubernetesCache.mu.RLock() // blocks mutation of the underlying cache until compute is done.
+	defer b.source.KubernetesCache.mu.RUnlock()
 
 	// setup secure vhosts if there is a matching secret
 	// we do this first so that the set of active secure vhosts is stable
 	// during the second ingress pass
-	for _, ing := range b.ingresses {
+	for _, ing := range b.source.ingresses {
 		for _, tls := range ing.Spec.TLS {
 			m := meta{name: tls.SecretName, namespace: ing.Namespace}
-			if sec := secret(m); sec != nil {
+			if sec := b.lookupSecret(m); sec != nil {
 				for _, host := range tls.Hosts {
-					svhost(host, 443).secret = sec
+					svhost := b.lookupSecureVirtualHost(host, 443)
+					svhost.secret = sec
 					// process annotations
 					switch ing.ObjectMeta.Annotations["contour.heptio.com/tls-minimum-protocol-version"] {
 					case "1.3":
-						svhost(host, 443).MinProtoVersion = auth.TlsParameters_TLSv1_3
+						svhost.MinProtoVersion = auth.TlsParameters_TLSv1_3
 					case "1.2":
-						svhost(host, 443).MinProtoVersion = auth.TlsParameters_TLSv1_2
+						svhost.MinProtoVersion = auth.TlsParameters_TLSv1_2
 					default:
 						// any other value is interpreted as TLS/1.1
-						svhost(host, 443).MinProtoVersion = auth.TlsParameters_TLSv1_1
+						svhost.MinProtoVersion = auth.TlsParameters_TLSv1_1
 					}
 				}
 			}
@@ -277,7 +285,7 @@ func (b *Builder) compute() *DAG {
 	}
 
 	// deconstruct each ingress into routes and virtualhost entries
-	for _, ing := range b.ingresses {
+	for _, ing := range b.source.ingresses {
 		// should we create port 80 routes for this ingress
 		httpAllowed := httpAllowed(ing)
 
@@ -297,11 +305,11 @@ func (b *Builder) compute() *DAG {
 				Timeout:      timeout,
 			}
 			m := meta{name: ing.Spec.Backend.ServiceName, namespace: ing.Namespace}
-			if s := service(m, ing.Spec.Backend.ServicePort); s != nil {
-				r.addService(s, nil, "", 0)
+			if s := b.lookupService(m, ing.Spec.Backend.ServicePort, 0); s != nil {
+				r.addService(s, nil, "")
 			}
 			if httpAllowed {
-				vhost("*", 80).routes[r.path] = r
+				b.lookupVirtualHost("*", 80).addRoute(r)
 			}
 		}
 
@@ -311,8 +319,8 @@ func (b *Builder) compute() *DAG {
 			if host == "" {
 				host = "*"
 			}
-			for n := range rule.IngressRuleValue.HTTP.Paths {
-				path := rule.IngressRuleValue.HTTP.Paths[n].Path
+			for _, httppath := range httppaths(rule) {
+				path := httppath.Path
 				if path == "" {
 					path = "/"
 				}
@@ -324,92 +332,150 @@ func (b *Builder) compute() *DAG {
 					Timeout:      timeout,
 				}
 
-				m := meta{name: rule.IngressRuleValue.HTTP.Paths[n].Backend.ServiceName, namespace: ing.Namespace}
-				if s := service(m, rule.IngressRuleValue.HTTP.Paths[n].Backend.ServicePort); s != nil {
-					r.addService(s, nil, "", s.Weight)
+				m := meta{name: httppath.Backend.ServiceName, namespace: ing.Namespace}
+				if s := b.lookupService(m, httppath.Backend.ServicePort, 0); s != nil {
+					r.addService(s, nil, "")
 				}
 				if httpAllowed {
-					vhost(host, 80).routes[r.path] = r
+					b.lookupVirtualHost(host, 80).addRoute(r)
 				}
-				if _, ok := _svhosts[hostport{host: host, port: 443}]; ok && host != "*" {
-					svhost(host, 443).routes[r.path] = r
+				if _, ok := b.svhosts[hostport{host: host, port: 443}]; ok && host != "*" {
+					b.lookupSecureVirtualHost(host, 443).addRoute(r)
 				}
 			}
 		}
 	}
 
 	// process ingressroute documents
-	var status []Status
-	orphaned := make(map[meta]bool)
-	for _, ir := range b.ingressroutes {
+	for _, ir := range b.validIngressRoutes() {
 		if ir.Spec.VirtualHost == nil {
-			// delegate ingress route. mark as orphaned if we haven't reached it before.
-			if _, ok := orphaned[meta{name: ir.Name, namespace: ir.Namespace}]; !ok {
-				orphaned[meta{name: ir.Name, namespace: ir.Namespace}] = true
-			}
+			// mark delegate ingressroute orphaned.
+			b.setOrphaned(ir)
 			continue
 		}
 
 		// ensure root ingressroute lives in allowed namespace
 		if !b.rootAllowed(ir) {
-			status = append(status, Status{Object: ir, Status: StatusInvalid, Description: "root IngressRoute cannot be defined in this namespace"})
+			b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: "root IngressRoute cannot be defined in this namespace"})
 			continue
 		}
 
 		host := ir.Spec.VirtualHost.Fqdn
 		if len(strings.TrimSpace(host)) == 0 {
-			status = append(status, Status{Object: ir, Status: StatusInvalid, Description: "Spec.VirtualHost.Fqdn must be specified"})
+			b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: "Spec.VirtualHost.Fqdn must be specified"})
 			continue
 		}
+
+		// lookup vhost to populate its aliases
+		vhost := b.lookupVirtualHost(host, 80)
+		vhost.aliases = ir.Spec.VirtualHost.Aliases
 
 		if tls := ir.Spec.VirtualHost.TLS; tls != nil {
 			// attach secrets to TLS enabled vhosts
 			m := meta{name: tls.SecretName, namespace: ir.Namespace}
-			if sec := secret(m); sec != nil {
-				svhost(host, ir.Spec.VirtualHost.Port).secret = sec
-				svhost(host, ir.Spec.VirtualHost.Port).MinProtoVersion = auth.TlsParameters_TLSv1_1 // TODO(dfc) issue 467
+			if sec := b.lookupSecret(m); sec != nil {
+				svhost := b.lookupSecureVirtualHost(host, ir.Spec.VirtualHost.Port)
+				svhost.secret = sec
+				svhost.aliases = ir.Spec.VirtualHost.Aliases
+				// process min protocol version
+				switch ir.Spec.VirtualHost.TLS.MinimumProtocolVersion {
+				case "1.3":
+					svhost.MinProtoVersion = auth.TlsParameters_TLSv1_3
+				case "1.2":
+					svhost.MinProtoVersion = auth.TlsParameters_TLSv1_2
+				default:
+					// any other value is interpreted as TLS/1.1
+					svhost.MinProtoVersion = auth.TlsParameters_TLSv1_1
+				}
 			}
 		}
 
-		prefixMatch := ""
-		irp := ingressRouteProcessor{
-			host:          host,
-			port:          ir.Spec.VirtualHost.Port,
-			service:       service,
+		b.processIngressRoute(ir, "", nil, host, ir.Spec.VirtualHost.HTTPSOnly)
+	}
+
+	return b.DAG()
+}
+
+// validIngressRoutes returns a slice of *ingressroutev1.IngressRoute objects.
+// invalid IngressRoute objects are excluded from the slice and a corresponding entry
+// added via setStatus.
+func (b *builder) validIngressRoutes() []*ingressroutev1.IngressRoute {
+	// ensure that a given fqdn is only referenced in a single ingressroute resource
+	var valid []*ingressroutev1.IngressRoute
+	fqdnIngressroutes := make(map[string][]*ingressroutev1.IngressRoute)
+	for _, ir := range b.source.ingressroutes {
+		if ir.Spec.VirtualHost == nil {
+			valid = append(valid, ir)
+			continue
 			vhost:         svhost,
-			ingressroutes: b.ingressroutes,
-			orphaned:      orphaned,
 		}
-		sts := irp.process(ir, prefixMatch, nil, host)
-		status = append(status, sts...)
+		fqdnIngressroutes[ir.Spec.VirtualHost.Fqdn] = append(fqdnIngressroutes[ir.Spec.VirtualHost.Fqdn], ir)
 	}
 
+	for fqdn, irs := range fqdnIngressroutes {
+		if len(irs) == 1 {
+			valid = append(valid, irs[0])
+			continue
+		}
+
+		// multiple irs use the same fqdn. mark them as invalid.
+		var conflicting []string
+		for _, ir := range irs {
+			conflicting = append(conflicting, fmt.Sprintf("%s/%s", ir.Namespace, ir.Name))
+		}
+		sort.Strings(conflicting) // sort for test stability
+		msg := fmt.Sprintf("fqdn %q is used in multiple IngressRoutes: %s", fqdn, strings.Join(conflicting, ", "))
+		for _, ir := range irs {
+			b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: msg, Vhost: fqdn})
+		}
+	}
+	return valid
+}
+
+// DAG returns a *DAG representing the current state of this builder.
+func (b *builder) DAG() *DAG {
 	var dag DAG
-	for _, vh := range _vhosts {
-		dag.roots = append(dag.roots, vh)
-	}
-	for _, svh := range _svhosts {
-		dag.roots = append(dag.roots, svh)
-	}
-
-	for meta, orph := range orphaned {
-		if orph {
-			ir, ok := b.ingressroutes[meta]
-			if ok {
-				status = append(status, Status{Object: ir, Status: StatusOrphaned, Description: "this IngressRoute is not part of a delegation chain from a root IngressRoute"})
-			}
+	for _, vh := range b.vhosts {
+		// suppress virtual hosts without routes.
+		if len(vh.routes) > 0 {
+			dag.roots = append(dag.roots, vh)
 		}
 	}
-	dag.statuses = status
+	for _, svh := range b.svhosts {
+		if svh.secret != nil {
+			dag.roots = append(dag.roots, svh)
+		}
+	}
+	for meta := range b.orphaned {
+		ir, ok := b.source.ingressroutes[meta]
+		if ok {
+			b.setStatus(Status{Object: ir, Status: StatusOrphaned, Description: "this IngressRoute is not part of a delegation chain from a root IngressRoute"})
+		}
+	}
+	dag.statuses = b.statuses
 	return &dag
 }
 
-// returns true if the root ingressroute lives in a root namespace
-func (b *Builder) rootAllowed(ir *ingressroutev1.IngressRoute) bool {
-	if len(b.IngressRouteRootNamespaces) == 0 {
+// setStatus assigns a status to an object.
+func (b *builder) setStatus(st Status) {
+	b.statuses = append(b.statuses, st)
+}
+
+// setOrphaned records an ingressroute as orphaned.
+func (b *builder) setOrphaned(ir *ingressroutev1.IngressRoute) {
+	if b.orphaned == nil {
+		b.orphaned = make(map[meta]bool)
+	}
+	m := meta{name: ir.Name, namespace: ir.Namespace}
+	b.orphaned[m] = true
+}
+
+// rootAllowed returns true if the ingressroute lives in a permitted root namespace.
+func (b *builder) rootAllowed(ir *ingressroutev1.IngressRoute) bool {
+	if len(b.source.IngressRouteRootNamespaces) == 0 {
 		return true
 	}
-	for _, ns := range b.IngressRouteRootNamespaces {
+	for _, ns := range b.source.IngressRouteRootNamespaces {
 		if ns == ir.Namespace {
 			return true
 		}
@@ -417,80 +483,94 @@ func (b *Builder) rootAllowed(ir *ingressroutev1.IngressRoute) bool {
 	return false
 }
 
-type ingressRouteProcessor struct {
-	host          string
-	port          int
-	service       func(m meta, port intstr.IntOrString) *Service
-	vhost         func(host string, port int) *SecureVirtualHost
-	ingressroutes map[meta]*ingressroutev1.IngressRoute
-	orphaned      map[meta]bool
-}
-
-func (irp *ingressRouteProcessor) process(ir *ingressroutev1.IngressRoute, prefixMatch string, visited []*ingressroutev1.IngressRoute, host string) []Status {
+func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMatch string, visited []*ingressroutev1.IngressRoute, host string, httpsOnly bool) {
 	visited = append(visited, ir)
 
-	var status []Status
 	for _, route := range ir.Spec.Routes {
 		// route cannot both delegate and point to services
 		if len(route.Services) > 0 && route.Delegate.Name != "" {
-			return []Status{{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("route %q: cannot specify services and delegate in the same route", route.Match), Vhost: host}}
+			b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("route %q: cannot specify services and delegate in the same route", route.Match), Vhost: host})
+			return
 		}
 		// base case: The route points to services, so we add them to the vhost
 		if len(route.Services) > 0 {
 			if !matchesPathPrefix(route.Match, prefixMatch) {
-				return []Status{{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("the path prefix %q does not match the parent's path prefix %q", route.Match, prefixMatch), Vhost: host}}
+				b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("the path prefix %q does not match the parent's path prefix %q", route.Match, prefixMatch), Vhost: host})
+				return
 			}
 			r := &Route{
-				path:   route.Match,
-				Object: ir,
+				path:      route.Match,
+				Object:    ir,
+				Websocket: route.EnableWebsockets,
 			}
 			for _, s := range route.Services {
 				if s.Port < 1 || s.Port > 65535 {
-					return []Status{{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("route %q: service %q: port must be in the range 1-65535", route.Match, s.Name), Vhost: host}}
+					b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("route %q: service %q: port must be in the range 1-65535", route.Match, s.Name), Vhost: host})
+					return
 				}
 				if s.Weight < 0 {
-					return []Status{{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("route %q: service %q: weight must be greater than or equal to zero", route.Match, s.Name), Vhost: host}}
+					b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("route %q: service %q: weight must be greater than or equal to zero", route.Match, s.Name), Vhost: host})
+					return
 				}
 				m := meta{name: s.Name, namespace: ir.Namespace}
-				if svc := irp.service(m, intstr.FromInt(s.Port)); svc != nil {
-					r.addService(svc, s.HealthCheck, s.Strategy, s.Weight)
+				if svc := b.lookupService(m, intstr.FromInt(s.Port), s.Weight); svc != nil {
+					r.addService(svc, s.HealthCheck, s.Strategy)
 				}
 			}
-			irp.vhost(irp.host, irp.port).routes[r.path] = r
+
+			if !httpsOnly {
+				b.lookupVirtualHost(host, irp.port).addRoute(r)
+			}
+			b.lookupSecureVirtualHost(host, irp.port).addRoute(r)
+			continue
+		}
+
+		if route.Delegate.Name == "" {
+			// not a delegate route
 			continue
 		}
 
 		// otherwise, if the route is delegating to another ingressroute, find it and process it.
-		if route.Delegate.Name != "" {
-			namespace := route.Delegate.Namespace
-			if namespace == "" {
-				// we are delegating to another IngressRoute in the same namespace
-				namespace = ir.Namespace
-			}
-			dest, ok := irp.ingressroutes[meta{name: route.Delegate.Name, namespace: namespace}]
-			if ok {
-				// dest is not an orphaned route, as there is an IR that points to it
-				irp.orphaned[meta{name: dest.Name, namespace: dest.Namespace}] = false
+		namespace := route.Delegate.Namespace
+		if namespace == "" {
+			// we are delegating to another IngressRoute in the same namespace
+			namespace = ir.Namespace
+		}
 
-				// ensure we are not following an edge that produces a cycle
-				var path []string
-				for _, vir := range visited {
-					path = append(path, fmt.Sprintf("%s/%s", vir.Namespace, vir.Name))
-				}
-				for _, vir := range visited {
-					if dest.Name == vir.Name && dest.Namespace == vir.Namespace {
-						path = append(path, fmt.Sprintf("%s/%s", dest.Namespace, dest.Name))
-						description := fmt.Sprintf("route creates a delegation cycle: %s", strings.Join(path, " -> "))
-						return []Status{{Object: ir, Status: StatusInvalid, Description: description, Vhost: host}}
-					}
-				}
+		if dest, ok := b.source.ingressroutes[meta{name: route.Delegate.Name, namespace: namespace}]; ok {
+			// dest is not an orphaned route, as there is an IR that points to it
+			delete(b.orphaned, meta{name: dest.Name, namespace: dest.Namespace})
 
-				// follow the link and process the target ingress route
-				status = append(status, irp.process(dest, route.Match, visited, host)...)
+			// ensure we are not following an edge that produces a cycle
+			var path []string
+			for _, vir := range visited {
+				path = append(path, fmt.Sprintf("%s/%s", vir.Namespace, vir.Name))
 			}
+			for _, vir := range visited {
+				if dest.Name == vir.Name && dest.Namespace == vir.Namespace {
+					path = append(path, fmt.Sprintf("%s/%s", dest.Namespace, dest.Name))
+					description := fmt.Sprintf("route creates a delegation cycle: %s", strings.Join(path, " -> "))
+					b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: description, Vhost: host})
+					return
+				}
+			}
+
+			// follow the link and process the target ingress route
+			b.processIngressRoute(dest, route.Match, visited, host, httpsOnly)
 		}
 	}
-	return append(status, Status{Object: ir, Status: StatusValid, Description: "valid IngressRoute", Vhost: host})
+	b.setStatus(Status{Object: ir, Status: StatusValid, Description: "valid IngressRoute", Vhost: host})
+}
+
+// httppaths returns a slice of HTTPIngressPath values for a given IngressRule.
+// In the case that the IngressRule contains no valid HTTPIngressPaths, a
+// nil slice is returned.
+func httppaths(rule v1beta1.IngressRule) []v1beta1.HTTPIngressPath {
+	if rule.IngressRuleValue.HTTP == nil {
+		// rule.IngressRuleValue.HTTP value is optional.
+		return nil
+	}
+	return rule.IngressRuleValue.HTTP.Paths
 }
 
 // matchesPathPrefix checks whether the given path matches the given prefix

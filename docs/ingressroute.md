@@ -216,7 +216,7 @@ spec:
           port: 80
 ```
 
-##### TLS (Not supported in beta.1)
+#### TLS
 
 IngressRoutes follow a similar pattern to Ingress for configuring TLS credentials.
 
@@ -261,6 +261,33 @@ spec:
           port: 80
 ```
 
+The TLS **Minimum Protocol Version** a vhost should negotiate can be specified by setting the spec.virtualhost.tls.minimumProtocolVersion:
+  - 1.3
+  - 1.2
+  - 1.1 (Default)
+
+#### Disable HTTP
+
+IngressRoutes support disabling HTTP at the VHost level, so that the listener is only exposed over HTTPS. This is achieved by setting the `httpsOnly` field to `true`.
+
+This functionality is equivalent to the `kubernetes.io/ingress.allow-http: false` annotation supported in the Ingress resource.
+
+```yaml
+apiVersion: contour.heptio.com/v1beta1
+kind: IngressRoute
+metadata: 
+  name: disableHttp
+spec: 
+  virtualhost:
+    fqdn: foo-basic.bar.com
+    httpsOnly: true
+  routes: 
+    - match: /
+      services: 
+        - name: s1
+          port: 80
+```
+
 ### Routing
 
 Each route entry in an IngressRoute must start with a prefix match.
@@ -270,7 +297,7 @@ Each route entry in an IngressRoute must start with a prefix match.
 IngressRoutes must have at least one route defined, but may support more.
 Paths defined are matched using prefix rules.
 In this example, any requests to `multi-path.bar.com/blog` or `multi-path.bar.com/blog/*` will be routed to the Service `s2`.
-All other requests to the host `multi-path.bar.com` will be routed to the Service `s2`.
+All other requests to the host `multi-path.bar.com` will be routed to the Service `s1`.
 
 ```yaml
 # multiple-paths.ingressroute.yaml
@@ -490,6 +517,31 @@ spec:
         - name: s1-def-health
           port: 80
         - name: s2-def-health
+          port: 80
+```
+
+#### WebSocket Support
+
+WebSocket support can be enabled on specific routes using the `EnableWebsockets` field:
+
+```yaml
+apiVersion: contour.heptio.com/v1beta1
+kind: IngressRoute
+metadata: 
+  name: chat
+  namespace: default
+spec:
+  virtualhost:
+    fqdn: chat.example.com
+  routes:
+    - match: /
+      services: 
+        - name: chat-app
+          port: 80
+    - match: /websocket
+      enableWebsockets: true # Setting this to true enables websocket for all paths that match /websocket
+      services:
+        - name: chat-app
           port: 80
 ```
 

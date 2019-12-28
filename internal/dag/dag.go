@@ -51,7 +51,7 @@ func (d *DAG) Statuses() []Status {
 type Route struct {
 	path     string
 	Object   interface{} // one of Ingress or IngressRoute
-	services map[portmeta]*Service
+	services map[servicemeta]*Service
 
 	// Should this route generate a 301 upgrade if accessed
 	// over HTTP?
@@ -70,13 +70,12 @@ type Route struct {
 
 func (r *Route) Prefix() string { return r.path }
 
-func (r *Route) addService(s *Service, hc *ingressroutev1.HealthCheck, lbStrat string, weight int) {
+func (r *Route) addService(s *Service, hc *ingressroutev1.HealthCheck, lbStrat string) {
 	if r.services == nil {
-		r.services = make(map[portmeta]*Service)
+		r.services = make(map[servicemeta]*Service)
 	}
 	s.HealthCheck = hc
 	s.LoadBalancerStrategy = lbStrat
-	s.Weight = weight
 	r.services[s.toMeta()] = s
 }
 
@@ -93,11 +92,21 @@ type VirtualHost struct {
 	// if the VirtualHost is generated inside Contour.
 	Port int
 
-	host   string
-	routes map[string]*Route
+	host    string
+	aliases []string
+	routes  map[string]*Route
+}
+
+func (v *VirtualHost) addRoute(route *Route) {
+	if v.routes == nil {
+		v.routes = make(map[string]*Route)
+	}
+	v.routes[route.path] = route
 }
 
 func (v *VirtualHost) FQDN() string { return v.host }
+
+func (v *VirtualHost) Aliases() []string { return v.aliases }
 
 func (v *VirtualHost) Visit(f func(Vertex)) {
 	for _, r := range v.routes {
@@ -115,9 +124,17 @@ type SecureVirtualHost struct {
 	// TLS minimum protocol version. Defaults to auth.TlsParameters_TLS_AUTO
 	MinProtoVersion auth.TlsParameters_TlsProtocol
 
-	host   string
-	routes map[string]*Route
-	secret *Secret
+	host    string
+	aliases []string
+	routes  map[string]*Route
+	secret  *Secret
+}
+
+func (s *SecureVirtualHost) addRoute(route *Route) {
+	if s.routes == nil {
+		s.routes = make(map[string]*Route)
+	}
+	s.routes[route.path] = route
 }
 
 func (s *SecureVirtualHost) Data() map[string][]byte {
@@ -128,6 +145,9 @@ func (s *SecureVirtualHost) Data() map[string][]byte {
 }
 
 func (s *SecureVirtualHost) FQDN() string { return s.host }
+
+func (s *SecureVirtualHost) Aliases() []string { return s.aliases }
+
 func (s *SecureVirtualHost) Visit(f func(Vertex)) {
 	for _, r := range s.routes {
 		f(r)
@@ -143,7 +163,7 @@ type Vertex interface {
 	Visitable
 }
 
-// Service represents a K8s Sevice as a DAG vertex. A Service is
+// Service represents a K8s Service as a DAG vertex. A Service is
 // a leaf in the DAG.
 type Service struct {
 	Object *v1.Service
@@ -157,7 +177,7 @@ type Service struct {
 	HealthCheck          *ingressroutev1.HealthCheck
 	LoadBalancerStrategy string
 
-	// Curcuit breaking limits
+	// Circuit breaking limits
 
 	// Max connections is maximum number of connections
 	// that Envoy will make to the upstream cluster.
@@ -180,17 +200,19 @@ func (s *Service) Name() string       { return s.Object.Name }
 func (s *Service) Namespace() string  { return s.Object.Namespace }
 func (s *Service) Visit(func(Vertex)) {}
 
-type portmeta struct {
+type servicemeta struct {
 	name      string
 	namespace string
 	port      int32
+	weight    int
 }
 
-func (s *Service) toMeta() portmeta {
-	return portmeta{
+func (s *Service) toMeta() servicemeta {
+	return servicemeta{
 		name:      s.Object.Name,
 		namespace: s.Object.Namespace,
 		port:      s.Port,
+		weight:    s.Weight,
 	}
 }
 
