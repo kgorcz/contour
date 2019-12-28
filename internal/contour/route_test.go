@@ -14,13 +14,13 @@
 package contour
 
 import (
-	"reflect"
 	"testing"
 	"time"
 
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/route"
 	"github.com/gogo/protobuf/types"
+	"github.com/google/go-cmp/cmp"
 	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
 	"github.com/heptio/contour/internal/dag"
 	"github.com/heptio/contour/internal/metrics"
@@ -89,7 +89,7 @@ func TestRouteVisit(t *testing.T) {
 						Domains: []string{"*"},
 						Routes: []route.Route{{
 							Match:  prefixmatch("/"),
-							Action: routeroute("default/kuard/8080"),
+							Action: routeroute("default/kuard/8080/da39a3ee5e"),
 						}},
 					}},
 				},
@@ -142,7 +142,7 @@ func TestRouteVisit(t *testing.T) {
 						Domains: []string{"www.example.com", "www.example.com:80"},
 						Routes: []route.Route{{
 							Match:  prefixmatch("/"),
-							Action: routeroute("default/backend/80"),
+							Action: routeroute("default/backend/80/da39a3ee5e"),
 						}},
 					}},
 				},
@@ -198,7 +198,7 @@ func TestRouteVisit(t *testing.T) {
 						Domains: []string{"*"},
 						Routes: []route.Route{{
 							Match:  prefixmatch("/"),
-							Action: routeroute("default/kuard/8080"),
+							Action: routeroute("default/kuard/8080/da39a3ee5e"),
 						}},
 					}},
 				},
@@ -264,7 +264,7 @@ func TestRouteVisit(t *testing.T) {
 						Domains: []string{"www.example.com", "www.example.com:80"},
 						Routes: []route.Route{{
 							Match:  prefixmatch("/"),
-							Action: routeroute("default/kuard/8080"),
+							Action: routeroute("default/kuard/8080/da39a3ee5e"),
 						}},
 					}},
 				},
@@ -275,7 +275,7 @@ func TestRouteVisit(t *testing.T) {
 						Domains: []string{"www.example.com", "www.example.com:443"},
 						Routes: []route.Route{{
 							Match:  prefixmatch("/"),
-							Action: routeroute("default/kuard/8080"),
+							Action: routeroute("default/kuard/8080/da39a3ee5e"),
 						}},
 					}},
 				},
@@ -334,8 +334,12 @@ func TestRouteVisit(t *testing.T) {
 						Name:    "www.example.com",
 						Domains: []string{"www.example.com", "www.example.com:80"},
 						Routes: []route.Route{{
-							Match:  prefixmatch("/"),
-							Action: routeroute("default/backend/8080"),
+							Match: prefixmatch("/"),
+							Action: &route.Route_Redirect{
+								Redirect: &route.RedirectAction{
+									HttpsRedirect: true,
+								},
+							},
 						}},
 					}},
 				},
@@ -346,7 +350,7 @@ func TestRouteVisit(t *testing.T) {
 						Domains: []string{"www.example.com", "www.example.com:443"},
 						Routes: []route.Route{{
 							Match:  prefixmatch("/"),
-							Action: routeroute("default/backend/8080"),
+							Action: routeroute("default/backend/8080/da39a3ee5e"),
 						}},
 					}},
 				},
@@ -415,7 +419,7 @@ func TestRouteVisit(t *testing.T) {
 						Domains: []string{"www.example.com", "www.example.com:443"},
 						Routes: []route.Route{{
 							Match:  prefixmatch("/"),
-							Action: routeroute("default/kuard/8080"),
+							Action: routeroute("default/kuard/8080/da39a3ee5e"),
 						}},
 					}},
 				},
@@ -496,7 +500,7 @@ func TestRouteVisit(t *testing.T) {
 						Domains: []string{"www.example.com", "www.example.com:443"},
 						Routes: []route.Route{{
 							Match:  prefixmatch("/"),
-							Action: routeroute("default/kuard/8080"),
+							Action: routeroute("default/kuard/8080/da39a3ee5e"),
 						}},
 					}},
 				},
@@ -558,10 +562,10 @@ func TestRouteVisit(t *testing.T) {
 						Domains: []string{"www.example.com", "www.example.com:80"},
 						Routes: []route.Route{{
 							Match:  prefixmatch("/ws1"),
-							Action: websocketroute("default/kuard/8080"),
+							Action: websocketroute("default/kuard/8080/da39a3ee5e"),
 						}, {
 							Match:  prefixmatch("/"),
-							Action: routeroute("default/kuard/8080"),
+							Action: routeroute("default/kuard/8080/da39a3ee5e"),
 						}},
 					}},
 				},
@@ -609,7 +613,7 @@ func TestRouteVisit(t *testing.T) {
 						Domains: []string{"*"},
 						Routes: []route.Route{{
 							Match:  prefixmatch("/"),
-							Action: routetimeout("default/kuard/8080", &infinity),
+							Action: routetimeout("default/kuard/8080/da39a3ee5e", &infinity),
 						}},
 					}},
 				},
@@ -657,7 +661,7 @@ func TestRouteVisit(t *testing.T) {
 						Domains: []string{"*"},
 						Routes: []route.Route{{
 							Match:  prefixmatch("/"),
-							Action: routetimeout("default/kuard/8080", &infinity),
+							Action: routetimeout("default/kuard/8080/da39a3ee5e", &infinity),
 						}},
 					}},
 				},
@@ -705,7 +709,7 @@ func TestRouteVisit(t *testing.T) {
 						Domains: []string{"*"},
 						Routes: []route.Route{{
 							Match:  prefixmatch("/"),
-							Action: routetimeout("default/kuard/8080", &nintyseconds),
+							Action: routetimeout("default/kuard/8080/da39a3ee5e", &nintyseconds),
 						}},
 					}},
 				},
@@ -761,7 +765,7 @@ func TestRouteVisit(t *testing.T) {
 						Domains: []string{"my-very-very-long-service-host-name.subdomain.boring-dept.my.company", "my-very-very-long-service-host-name.subdomain.boring-dept.my.company:80"},
 						Routes: []route.Route{{
 							Match:  prefixmatch("/"),
-							Action: routeroute("default/kuard/80"),
+							Action: routeroute("default/kuard/80/da39a3ee5e"),
 						}},
 					}},
 				},
@@ -849,7 +853,7 @@ func TestRouteVisit(t *testing.T) {
 						Domains: []string{"*"},
 						Routes: []route.Route{{
 							Match:  prefixmatch("/"),
-							Action: routeroute("default/kuard/8080"),
+							Action: routeroute("default/kuard/8080/da39a3ee5e"),
 						}},
 					}},
 				},
@@ -858,6 +862,153 @@ func TestRouteVisit(t *testing.T) {
 				},
 			},
 		},
+		"ingress retry-on": {
+			objs: []interface{}{
+				&v1beta1.Ingress{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+						Annotations: map[string]string{
+							"contour.heptio.com/retry-on": "50x,gateway-error",
+						},
+					},
+					Spec: v1beta1.IngressSpec{
+						Backend: &v1beta1.IngressBackend{
+							ServiceName: "kuard",
+							ServicePort: intstr.FromInt(8080),
+						},
+					},
+				},
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Protocol:   "TCP",
+							Port:       8080,
+							TargetPort: intstr.FromInt(8080),
+						}},
+					},
+				},
+			},
+			want: map[string]*v2.RouteConfiguration{
+				"ingress_http": {
+					Name: "ingress_http",
+					VirtualHosts: []route.VirtualHost{{
+						Name:    "*",
+						Domains: []string{"*"},
+						Routes: []route.Route{{
+							Match:  prefixmatch("/"),
+							Action: routeretry("default/kuard/8080/da39a3ee5e", "50x,gateway-error", 0, 0),
+						}},
+					}},
+				},
+				"ingress_https": {
+					Name: "ingress_https",
+				},
+			},
+		},
+		"ingress retry-on, num-retries": {
+			objs: []interface{}{
+				&v1beta1.Ingress{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+						Annotations: map[string]string{
+							"contour.heptio.com/retry-on":    "50x,gateway-error",
+							"contour.heptio.com/num-retries": "7", // not five or six or eight, but seven.
+						},
+					},
+					Spec: v1beta1.IngressSpec{
+						Backend: &v1beta1.IngressBackend{
+							ServiceName: "kuard",
+							ServicePort: intstr.FromInt(8080),
+						},
+					},
+				},
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Protocol:   "TCP",
+							Port:       8080,
+							TargetPort: intstr.FromInt(8080),
+						}},
+					},
+				},
+			},
+			want: map[string]*v2.RouteConfiguration{
+				"ingress_http": {
+					Name: "ingress_http",
+					VirtualHosts: []route.VirtualHost{{
+						Name:    "*",
+						Domains: []string{"*"},
+						Routes: []route.Route{{
+							Match:  prefixmatch("/"),
+							Action: routeretry("default/kuard/8080/da39a3ee5e", "50x,gateway-error", 7, 0),
+						}},
+					}},
+				},
+				"ingress_https": {
+					Name: "ingress_https",
+				},
+			},
+		},
+		"ingress retry-on, per-try-timeout": {
+			objs: []interface{}{
+				&v1beta1.Ingress{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+						Annotations: map[string]string{
+							"contour.heptio.com/retry-on":        "50x,gateway-error",
+							"contour.heptio.com/per-try-timeout": "150ms",
+						},
+					},
+					Spec: v1beta1.IngressSpec{
+						Backend: &v1beta1.IngressBackend{
+							ServiceName: "kuard",
+							ServicePort: intstr.FromInt(8080),
+						},
+					},
+				},
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Protocol:   "TCP",
+							Port:       8080,
+							TargetPort: intstr.FromInt(8080),
+						}},
+					},
+				},
+			},
+			want: map[string]*v2.RouteConfiguration{
+				"ingress_http": {
+					Name: "ingress_http",
+					VirtualHosts: []route.VirtualHost{{
+						Name:    "*",
+						Domains: []string{"*"},
+						Routes: []route.Route{{
+							Match:  prefixmatch("/"),
+							Action: routeretry("default/kuard/8080/da39a3ee5e", "50x,gateway-error", 0, 150*time.Millisecond),
+						}},
+					}},
+				},
+				"ingress_https": {
+					Name: "ingress_https",
+				},
+			},
+		},
+
 		"ingressroute no weights defined": {
 			objs: []interface{}{
 				&ingressroutev1.IngressRoute{
@@ -924,15 +1075,13 @@ func TestRouteVisit(t *testing.T) {
 									ClusterSpecifier: &route.RouteAction_WeightedClusters{
 										WeightedClusters: &route.WeightedCluster{
 											Clusters: []*route.WeightedCluster_ClusterWeight{{
-												Name:   "default/backend/80",
-												Weight: &types.UInt32Value{Value: uint32(1)},
+												Name:   "default/backend/80/da39a3ee5e",
+												Weight: u32(1),
 											}, {
-												Name:   "default/backendtwo/80",
-												Weight: &types.UInt32Value{Value: uint32(1)},
+												Name:   "default/backendtwo/80/da39a3ee5e",
+												Weight: u32(1),
 											}},
-											TotalWeight: &types.UInt32Value{
-												Value: uint32(2),
-											},
+											TotalWeight: u32(2),
 										},
 									},
 								},
@@ -1012,107 +1161,13 @@ func TestRouteVisit(t *testing.T) {
 									ClusterSpecifier: &route.RouteAction_WeightedClusters{
 										WeightedClusters: &route.WeightedCluster{
 											Clusters: []*route.WeightedCluster_ClusterWeight{{
-												Name:   "default/backend/80",
-												Weight: &types.UInt32Value{Value: uint32(0)},
+												Name:   "default/backend/80/da39a3ee5e",
+												Weight: u32(0),
 											}, {
-												Name:   "default/backendtwo/80",
-												Weight: &types.UInt32Value{Value: uint32(50)},
+												Name:   "default/backendtwo/80/da39a3ee5e",
+												Weight: u32(50),
 											}},
-											TotalWeight: &types.UInt32Value{
-												Value: uint32(50),
-											},
-										},
-									},
-								},
-							},
-						}},
-					}},
-				},
-				"ingress_https": {
-					Name: "ingress_https",
-				},
-			},
-		},
-		"ingressroute aliases defined": {
-			objs: []interface{}{
-				&ingressroutev1.IngressRoute{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "simple",
-						Namespace: "default",
-					},
-					Spec: ingressroutev1.IngressRouteSpec{
-						VirtualHost: &ingressroutev1.VirtualHost{
-							Fqdn: "www.example.com",
-							Aliases: []string{
-								"foo.com",
-								"bar.com",
-							},
-						},
-						Routes: []ingressroutev1.Route{{
-							Match: "/",
-							Services: []ingressroutev1.Service{
-								{
-									Name: "backend",
-									Port: 80,
-								},
-								{
-									Name:   "backendtwo",
-									Port:   80,
-									Weight: 50,
-								},
-							},
-						}},
-					},
-				},
-				&v1.Service{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "backend",
-						Namespace: "default",
-					},
-					Spec: v1.ServiceSpec{
-						Ports: []v1.ServicePort{{
-							Protocol:   "TCP",
-							Port:       80,
-							TargetPort: intstr.FromInt(8080),
-						}},
-					},
-				},
-				&v1.Service{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "backendtwo",
-						Namespace: "default",
-					},
-					Spec: v1.ServiceSpec{
-						Ports: []v1.ServicePort{{
-							Protocol:   "TCP",
-							Port:       80,
-							TargetPort: intstr.FromInt(8080),
-						}},
-					},
-				},
-			},
-			want: map[string]*v2.RouteConfiguration{
-				"ingress_http": {
-					Name: "ingress_http",
-					VirtualHosts: []route.VirtualHost{{
-						Name:    "www.example.com",
-						Domains: []string{"foo.com", "bar.com", "www.example.com", "www.example.com:80", "foo.com:80", "bar.com:80"},
-						Routes: []route.Route{{
-							Match: prefixmatch("/"),
-							Action: &route.Route_Route{
-								Route: &route.RouteAction{
-									ClusterSpecifier: &route.RouteAction_WeightedClusters{
-										WeightedClusters: &route.WeightedCluster{
-											Clusters: []*route.WeightedCluster_ClusterWeight{{
-												Name:   "default/backend/80",
-												Weight: &types.UInt32Value{Value: uint32(0)},
-											}, {
-												Name:   "default/backendtwo/80",
-												Weight: &types.UInt32Value{Value: uint32(50)},
-											}},
-											TotalWeight: &types.UInt32Value{
-												Value: uint32(50),
-											},
+											TotalWeight: u32(50),
 										},
 									},
 								},
@@ -1193,15 +1248,13 @@ func TestRouteVisit(t *testing.T) {
 									ClusterSpecifier: &route.RouteAction_WeightedClusters{
 										WeightedClusters: &route.WeightedCluster{
 											Clusters: []*route.WeightedCluster_ClusterWeight{{
-												Name:   "default/backend/80",
-												Weight: &types.UInt32Value{Value: uint32(22)},
+												Name:   "default/backend/80/da39a3ee5e",
+												Weight: u32(22),
 											}, {
-												Name:   "default/backendtwo/80",
-												Weight: &types.UInt32Value{Value: uint32(50)},
+												Name:   "default/backendtwo/80/da39a3ee5e",
+												Weight: u32(50),
 											}},
-											TotalWeight: &types.UInt32Value{
-												Value: uint32(72),
-											},
+											TotalWeight: u32(72),
 										},
 									},
 								},
@@ -1277,8 +1330,8 @@ func TestRouteVisit(t *testing.T) {
 				Visitable:  reh.Build(),
 			}
 			got := v.Visit()
-			if !reflect.DeepEqual(tc.want, got) {
-				t.Fatalf("expected:\n%+v\ngot:\n%+v", tc.want, got)
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Fatal(diff)
 			}
 		})
 	}
@@ -1291,11 +1344,9 @@ func routeroute(cluster string) *route.Route_Route {
 				WeightedClusters: &route.WeightedCluster{
 					Clusters: []*route.WeightedCluster_ClusterWeight{{
 						Name:   cluster,
-						Weight: &types.UInt32Value{Value: uint32(1)},
+						Weight: u32(1),
 					}},
-					TotalWeight: &types.UInt32Value{
-						Value: uint32(1),
-					},
+					TotalWeight: u32(1),
 				},
 			},
 		},
@@ -1303,23 +1354,36 @@ func routeroute(cluster string) *route.Route_Route {
 }
 
 func websocketroute(c string) *route.Route_Route {
-	cl := routeroute(c)
-	cl.Route.UseWebsocket = &types.BoolValue{Value: true}
-	return cl
+	r := routeroute(c)
+	r.Route.UseWebsocket = &types.BoolValue{Value: true}
+	return r
 }
 
 func routetimeout(cluster string, timeout *time.Duration) *route.Route_Route {
-	cl := routeroute(cluster)
-	cl.Route.Timeout = timeout
-	return cl
+	r := routeroute(cluster)
+	r.Route.Timeout = timeout
+	return r
+}
+
+func routeretry(cluster string, retryOn string, numRetries uint32, perTryTimeout time.Duration) *route.Route_Route {
+	r := routeroute(cluster)
+	r.Route.RetryPolicy = &route.RouteAction_RetryPolicy{
+		RetryOn: retryOn,
+	}
+	if numRetries > 0 {
+		r.Route.RetryPolicy.NumRetries = u32(numRetries)
+	}
+	if perTryTimeout > 0 {
+		r.Route.RetryPolicy.PerTryTimeout = &perTryTimeout
+	}
+	return r
 }
 
 func TestActionRoute(t *testing.T) {
 	tests := map[string]struct {
-		services  []*dag.Service
-		websocket bool
-		timeout   time.Duration
-		want      *route.Route_Route
+		route    dag.Route
+		services []*dag.Service
+		want     *route.Route_Route
 	}{
 		"single service": {
 			services: []*dag.Service{
@@ -1340,21 +1404,19 @@ func TestActionRoute(t *testing.T) {
 					ClusterSpecifier: &route.RouteAction_WeightedClusters{
 						WeightedClusters: &route.WeightedCluster{
 							Clusters: []*route.WeightedCluster_ClusterWeight{{
-								Name: "default/kuard/8080",
-								Weight: &types.UInt32Value{
-									Value: uint32(1),
-								}},
-							},
-							TotalWeight: &types.UInt32Value{
-								Value: uint32(1),
-							},
+								Name:   "default/kuard/8080/da39a3ee5e",
+								Weight: u32(1),
+							}},
+							TotalWeight: u32(1),
 						},
 					},
 				},
 			},
 		},
 		"single service with timeout": {
-			timeout: 30 * time.Second,
+			route: dag.Route{
+				Timeout: 30 * time.Second,
+			},
 			services: []*dag.Service{
 				{
 					Object: &v1.Service{
@@ -1373,14 +1435,10 @@ func TestActionRoute(t *testing.T) {
 					ClusterSpecifier: &route.RouteAction_WeightedClusters{
 						WeightedClusters: &route.WeightedCluster{
 							Clusters: []*route.WeightedCluster_ClusterWeight{{
-								Name: "default/kuard/8080",
-								Weight: &types.UInt32Value{
-									Value: uint32(1),
-								}},
-							},
-							TotalWeight: &types.UInt32Value{
-								Value: uint32(1),
-							},
+								Name:   "default/kuard/8080/da39a3ee5e",
+								Weight: u32(1),
+							}},
+							TotalWeight: u32(1),
 						},
 					},
 					Timeout: pduration(30 * time.Second),
@@ -1388,7 +1446,9 @@ func TestActionRoute(t *testing.T) {
 			},
 		},
 		"single service with infinite timeout": {
-			timeout: time.Duration(-1),
+			route: dag.Route{
+				Timeout: -1,
+			},
 			services: []*dag.Service{
 				{
 					Object: &v1.Service{
@@ -1407,22 +1467,20 @@ func TestActionRoute(t *testing.T) {
 					ClusterSpecifier: &route.RouteAction_WeightedClusters{
 						WeightedClusters: &route.WeightedCluster{
 							Clusters: []*route.WeightedCluster_ClusterWeight{{
-								Name: "default/kuard/8080",
-								Weight: &types.UInt32Value{
-									Value: uint32(1),
-								}},
-							},
-							TotalWeight: &types.UInt32Value{
-								Value: uint32(1),
-							},
+								Name:   "default/kuard/8080/da39a3ee5e",
+								Weight: u32(1),
+							}},
+							TotalWeight: u32(1),
 						},
 					},
-					Timeout: pduration(time.Duration(0)),
+					Timeout: pduration(0),
 				},
 			},
 		},
 		"single service with websockets": {
-			websocket: true,
+			route: dag.Route{
+				Websocket: true,
+			},
 			services: []*dag.Service{
 				{
 					Object: &v1.Service{
@@ -1441,14 +1499,10 @@ func TestActionRoute(t *testing.T) {
 					ClusterSpecifier: &route.RouteAction_WeightedClusters{
 						WeightedClusters: &route.WeightedCluster{
 							Clusters: []*route.WeightedCluster_ClusterWeight{{
-								Name: "default/kuard/8080",
-								Weight: &types.UInt32Value{
-									Value: uint32(1),
-								}},
-							},
-							TotalWeight: &types.UInt32Value{
-								Value: uint32(1),
-							},
+								Name:   "default/kuard/8080/da39a3ee5e",
+								Weight: u32(1),
+							}},
+							TotalWeight: u32(1),
 						},
 					},
 					UseWebsocket: &types.BoolValue{Value: true},
@@ -1456,8 +1510,10 @@ func TestActionRoute(t *testing.T) {
 			},
 		},
 		"single service with websockets and timeout": {
-			websocket: true,
-			timeout:   5 * time.Second,
+			route: dag.Route{
+				Websocket: true,
+				Timeout:   5 * time.Second,
+			},
 			services: []*dag.Service{
 				{
 					Object: &v1.Service{
@@ -1476,14 +1532,10 @@ func TestActionRoute(t *testing.T) {
 					ClusterSpecifier: &route.RouteAction_WeightedClusters{
 						WeightedClusters: &route.WeightedCluster{
 							Clusters: []*route.WeightedCluster_ClusterWeight{{
-								Name: "default/kuard/8080",
-								Weight: &types.UInt32Value{
-									Value: uint32(1),
-								}},
-							},
-							TotalWeight: &types.UInt32Value{
-								Value: uint32(1),
-							},
+								Name:   "default/kuard/8080/da39a3ee5e",
+								Weight: u32(1),
+							}},
+							TotalWeight: u32(1),
 						},
 					},
 					Timeout:      pduration(5 * time.Second),
@@ -1491,6 +1543,77 @@ func TestActionRoute(t *testing.T) {
 				},
 			},
 		},
+		"single service without retry-on": {
+			route: dag.Route{
+				NumRetries:    7,                // ignored
+				PerTryTimeout: 10 * time.Second, // ignored
+			},
+			services: []*dag.Service{
+				{
+					Object: &v1.Service{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "kuard",
+							Namespace: "default",
+						},
+					},
+					ServicePort: &v1.ServicePort{
+						Port: 8080,
+					},
+				},
+			},
+			want: &route.Route_Route{
+				Route: &route.RouteAction{
+					ClusterSpecifier: &route.RouteAction_WeightedClusters{
+						WeightedClusters: &route.WeightedCluster{
+							Clusters: []*route.WeightedCluster_ClusterWeight{{
+								Name:   "default/kuard/8080/da39a3ee5e",
+								Weight: u32(1),
+							}},
+							TotalWeight: u32(1),
+						},
+					},
+				},
+			},
+		},
+		"single service with retry-on": {
+			route: dag.Route{
+				RetryOn:       "50x",
+				NumRetries:    7,
+				PerTryTimeout: 10 * time.Second,
+			},
+			services: []*dag.Service{
+				{
+					Object: &v1.Service{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "kuard",
+							Namespace: "default",
+						},
+					},
+					ServicePort: &v1.ServicePort{
+						Port: 8080,
+					},
+				},
+			},
+			want: &route.Route_Route{
+				Route: &route.RouteAction{
+					ClusterSpecifier: &route.RouteAction_WeightedClusters{
+						WeightedClusters: &route.WeightedCluster{
+							Clusters: []*route.WeightedCluster_ClusterWeight{{
+								Name:   "default/kuard/8080/da39a3ee5e",
+								Weight: u32(1),
+							}},
+							TotalWeight: u32(1),
+						},
+					},
+					RetryPolicy: &route.RouteAction_RetryPolicy{
+						RetryOn:       "50x",
+						NumRetries:    u32(7),
+						PerTryTimeout: pduration(10 * time.Second),
+					},
+				},
+			},
+		},
+
 		"multiple services": {
 			services: []*dag.Service{
 				{
@@ -1521,67 +1644,55 @@ func TestActionRoute(t *testing.T) {
 					ClusterSpecifier: &route.RouteAction_WeightedClusters{
 						WeightedClusters: &route.WeightedCluster{
 							Clusters: []*route.WeightedCluster_ClusterWeight{{
-								Name: "default/kuard/8080",
-								Weight: &types.UInt32Value{
-									Value: uint32(1),
-								}}, {
-								Name: "default/nginx/8080",
-								Weight: &types.UInt32Value{
-									Value: uint32(1),
-								}},
-							},
-							TotalWeight: &types.UInt32Value{
-								Value: uint32(2),
-							},
+								Name:   "default/kuard/8080/da39a3ee5e",
+								Weight: u32(1),
+							}, {
+								Name:   "default/nginx/8080/da39a3ee5e",
+								Weight: u32(1),
+							}},
+							TotalWeight: u32(2),
 						},
 					},
 				},
 			},
 		},
 		"multiple weighted services": {
-			services: []*dag.Service{
-				{
-					Object: &v1.Service{
-						ObjectMeta: metav1.ObjectMeta{
-							Name:      "kuard",
-							Namespace: "default",
-						},
+			services: []*dag.Service{{
+				Object: &v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
 					},
-					ServicePort: &v1.ServicePort{
-						Port: 8080,
-					},
-					Weight: 80,
 				},
-				{
-					Object: &v1.Service{
-						ObjectMeta: metav1.ObjectMeta{
-							Name:      "nginx",
-							Namespace: "default",
-						},
-					},
-					ServicePort: &v1.ServicePort{
-						Port: 8080,
-					},
-					Weight: 20,
+				ServicePort: &v1.ServicePort{
+					Port: 8080,
 				},
+				Weight: 80,
+			}, {
+				Object: &v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "nginx",
+						Namespace: "default",
+					},
+				},
+				ServicePort: &v1.ServicePort{
+					Port: 8080,
+				},
+				Weight: 20,
+			},
 			},
 			want: &route.Route_Route{
 				Route: &route.RouteAction{
 					ClusterSpecifier: &route.RouteAction_WeightedClusters{
 						WeightedClusters: &route.WeightedCluster{
 							Clusters: []*route.WeightedCluster_ClusterWeight{{
-								Name: "default/kuard/8080",
-								Weight: &types.UInt32Value{
-									Value: uint32(80),
-								}}, {
-								Name: "default/nginx/8080",
-								Weight: &types.UInt32Value{
-									Value: uint32(20),
-								}},
-							},
-							TotalWeight: &types.UInt32Value{
-								Value: uint32(100),
-							},
+								Name:   "default/kuard/8080/da39a3ee5e",
+								Weight: u32(80),
+							}, {
+								Name:   "default/nginx/8080/da39a3ee5e",
+								Weight: u32(20),
+							}},
+							TotalWeight: u32(100),
 						},
 					},
 				},
@@ -1630,22 +1741,16 @@ func TestActionRoute(t *testing.T) {
 					ClusterSpecifier: &route.RouteAction_WeightedClusters{
 						WeightedClusters: &route.WeightedCluster{
 							Clusters: []*route.WeightedCluster_ClusterWeight{{
-								Name: "default/kuard/8080",
-								Weight: &types.UInt32Value{
-									Value: uint32(80),
-								}}, {
-								Name: "default/nginx/8080",
-								Weight: &types.UInt32Value{
-									Value: uint32(20),
-								}}, {
-								Name: "default/notraffic/8080",
-								Weight: &types.UInt32Value{
-									Value: uint32(0),
-								}},
-							},
-							TotalWeight: &types.UInt32Value{
-								Value: uint32(100),
-							},
+								Name:   "default/kuard/8080/da39a3ee5e",
+								Weight: u32(80),
+							}, {
+								Name:   "default/nginx/8080/da39a3ee5e",
+								Weight: u32(20),
+							}, {
+								Name:   "default/notraffic/8080/da39a3ee5e",
+								Weight: u32(0),
+							}},
+							TotalWeight: u32(100),
 						},
 					},
 				},
@@ -1655,9 +1760,9 @@ func TestActionRoute(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := actionroute(tc.services, tc.websocket, tc.timeout)
-			if !reflect.DeepEqual(tc.want, got) {
-				t.Errorf("wanted:\n%v\ngot:\n%v\n", tc.want, got)
+			got := actionroute(&tc.route, tc.services)
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Fatal(diff)
 			}
 		})
 	}
@@ -1666,3 +1771,5 @@ func TestActionRoute(t *testing.T) {
 func pduration(d time.Duration) *time.Duration {
 	return &d
 }
+
+func u32(val uint32) *types.UInt32Value { return &types.UInt32Value{Value: val} }

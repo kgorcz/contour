@@ -42,14 +42,14 @@ Implementing similar behavior using an IngressRoute looks like this:
 # ingressroute.yaml
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
-metadata: 
+metadata:
   name: basic
-spec: 
+spec:
   virtualhost:
     fqdn: foo-basic.bar.com
-  routes: 
+  routes:
     - match: /
-      services: 
+      services:
         - name: s1
           port: 80
 ```
@@ -59,10 +59,10 @@ spec:
 **Line 6-7**: The presence of the `virtualhost` field indicates that this is a root IngressRoute that is the top level entry point for this domain.
 The `fqdn` field specifies the fully qualified domain name that will be used to match against `Host:` HTTP headers.
 
-**Lines 8-9**: IngressRoutes must have one or more `routes`, each of which must have a path to match against (e.g. `/blog`) and then one or more `services` which will handle the HTTP traffic. 
+**Lines 8-9**: IngressRoutes must have one or more `routes`, each of which must have a path to match against (e.g. `/blog`) and then one or more `services` which will handle the HTTP traffic.
 
 **Lines 10-12**: The `services` field is an array of named Service & Port combinations that will be used for this IngressRoute path.
-Ingress HTTP traffic will be sent directly to the Endpoints corresponding to the Service. 
+Ingress HTTP traffic will be sent directly to the Endpoints corresponding to the Service.
 
 ## Interacting with IngressRoutes
 
@@ -165,54 +165,30 @@ must be represented by two different IngressRoute objects:
 # ingressroute-name.yaml
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
-metadata: 
+metadata:
   name: name-example-foo
   namespace: default
-spec: 
+spec:
   virtualhost:
     fqdn: foo1.bar.com
-  routes: 
+  routes:
     - match: /
-      services: 
+      services:
         - name: s1
           port: 80
 ---
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
-metadata: 
+metadata:
   name: name-example-bar
   namespace: default
-spec: 
+spec:
   virtualhost:
     fqdn: bar1.bar.com
-  routes: 
+  routes:
     - match: /
-      services: 
+      services:
         - name: s2
-          port: 80
-```
-
-#### Domain Aliases (Not supported in beta.1)
-
-A single IngressRoute can define the routing configuration for a root domain and zero or more domain aliases.
-This allows for sharing of configuration across multiple domains (e.g. `foo.com`, `www.foo.com`, and `bar.com`).
-
-```yaml
-# domain-aliases.ingressroute.yaml
-apiVersion: contour.heptio.com/v1beta1
-kind: IngressRoute
-metadata: 
-  name: domain-aliases
-  namespace: default
-spec: 
-  virtualhost:
-    fqdn: bar.com
-    aliases:
-      - www.bar.com
-  routes: 
-    - match: /
-      services: 
-        - name: s1
           port: 80
 ```
 
@@ -222,8 +198,11 @@ IngressRoutes follow a similar pattern to Ingress for configuring TLS credential
 
 You can secure an IngressRoute by specifying a secret that contains a TLS private key and certificate.
 Currently, IngressRoutes only support a single TLS port, 443, and assume TLS termination.
-If the `virtualhost` section includes domain aliases, the certificate must include the necessary Subject Authority Name (SAN) for each alias.
+If multiple IngressRoute's utilize the same secret, then the certificate must include the necessary Subject Authority Name (SAN) for each fqdn.
 Contour (via Envoy) uses the SNI TLS extension to handle this behavior.
+
+Contour also follows a "secure first" approach. When TLS is enabled for a virtual host, any request to the insecure port is redirected to the secure interface with a 301 redirect.
+Specific routes can be configured to override this behavior and handle insecure requests by enabling the `spec.routes.permitInsecure` parameter on a Route.
 
 The TLS secret must contain keys named tls.crt and tls.key that contain the certificate and private key to use for TLS, e.g.:
 
@@ -246,8 +225,33 @@ The IngressRoute can be configured to use this secret using `tls.secretName` pro
 # tls.ingressroute.yaml
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
-metadata: 
+metadata:
   name: tls-example
+  namespace: default
+spec:
+  virtualhost:
+    fqdn: foo2.bar.com
+    tls:
+      secretName: testsecret
+  routes:
+    - match: /
+      services:
+        - name: s1
+          port: 80
+```
+
+The TLS **Minimum Protocol Version** a vhost should negotiate can be specified by setting the `spec.virtualhost.tls.minimumProtocolVersion`:
+  - 1.3
+  - 1.2
+  - 1.1 (Default)
+
+The IngressRoute can be configured to permit insecure requests to specific Routes. In this example, any request to `foo2.bar.com/blog` will not receive a 301 redirect to HTTPS, but the `/` route will:
+
+```yaml
+apiVersion: contour.heptio.com/v1beta1
+kind: IngressRoute
+metadata: 
+  name: tls-example-insecure
   namespace: default
 spec: 
   virtualhost:
@@ -259,33 +263,11 @@ spec:
       services: 
         - name: s1
           port: 80
-```
-
-The TLS **Minimum Protocol Version** a vhost should negotiate can be specified by setting the spec.virtualhost.tls.minimumProtocolVersion:
-  - 1.3
-  - 1.2
-  - 1.1 (Default)
-
-#### Disable HTTP
-
-IngressRoutes support disabling HTTP at the VHost level, so that the listener is only exposed over HTTPS. This is achieved by setting the `httpsOnly` field to `true`.
-
-This functionality is equivalent to the `kubernetes.io/ingress.allow-http: false` annotation supported in the Ingress resource.
-
-```yaml
-apiVersion: contour.heptio.com/v1beta1
-kind: IngressRoute
-metadata: 
-  name: disableHttp
-spec: 
-  virtualhost:
-    fqdn: foo-basic.bar.com
-    httpsOnly: true
-  routes: 
-    - match: /
+    - match: /blog
       services: 
-        - name: s1
+        - name: s2
           port: 80
+          permitInsecure: true
 ```
 
 ### Routing
@@ -303,18 +285,19 @@ All other requests to the host `multi-path.bar.com` will be routed to the Servic
 # multiple-paths.ingressroute.yaml
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
-metadata: 
+metadata:
   name: multiple-paths
   namespace: default
-spec: 
+spec:
   virtualhost:
     fqdn: multi-path.bar.com
-  routes: 
+  routes:
     - match: / # matches everything else
-      services: 
+      services:
         - name: s1
           port: 80
     - match: /blog # matches `multi-path.bar.com/blog` or `multi-path.bar.com/blog/*`
+      services:
         - name: s2
           port: 80
 ```
@@ -327,15 +310,15 @@ One of the key IngressRoute features is the ability to support multiple services
 # multiple-upstreams.ingressroute.yaml
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
-metadata: 
+metadata:
   name: multiple-upstreams
   namespace: default
-spec: 
+spec:
   virtualhost:
     fqdn: multi.bar.com
-  routes: 
+  routes:
     - match: /
-      services: 
+      services:
         - name: s1
           port: 80
         - name: s2
@@ -354,15 +337,15 @@ This is commonly used for canary testing of new versions of an application when 
 # weight-shfiting.ingressroute.yaml
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
-metadata: 
+metadata:
   name: weight-shifting
   namespace: default
-spec: 
+spec:
   virtualhost:
     fqdn: weights.bar.com
-  routes: 
+  routes:
     - match: /
-      services: 
+      services:
         - name: s1
           port: 80
           weight: 10
@@ -399,15 +382,15 @@ Service `s1-strategy` does not have an explicit strategy defined so it will use 
 # lb-strategy.ingressroute.yaml
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
-metadata: 
+metadata:
   name: lb-strategy
   namespace: default
-spec: 
+spec:
   virtualhost:
     fqdn: strategy.bar.com
-  routes: 
+  routes:
     - match: /
-      services: 
+      services:
         - name: s1-strategy
           port: 80
         - name: s2-strategy
@@ -427,16 +410,16 @@ Service `s3-def-strategy` will have requests distributed randomly.
 # default-lb-strategy.ingressroute.yaml
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
-metadata: 
+metadata:
   name: default-lb-strategy
   namespace: default
-spec: 
+spec:
   virtualhost:
     fqdn: default-strategy.bar.com
   strategy: WeightedLeastRequest # Default LB algorithm to be applied to services
-  routes: 
+  routes:
     - match: /
-      services: 
+      services:
         - name: s1-def-strategy
           port: 80
         - name: s2-def-strategy
@@ -460,13 +443,13 @@ It is important to note that these are health checks which Envoy implements and 
 # health-checks.ingressroute.yaml
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
-metadata: 
+metadata:
   name: health-check
   namespace: default
-spec: 
+spec:
   virtualhost:
     fqdn: health.bar.com
-  routes: 
+  routes:
     - match: /
       services:
         - name: s1-health
@@ -499,7 +482,7 @@ You may still override this default on a per-Service basis.
 # default-health-checks.ingressroute.yaml
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
-metadata: 
+metadata:
   name: health-check
   namespace: default
 spec:
@@ -513,7 +496,7 @@ spec:
     healthyThresholdCount: 5
   routes:
     - match: /
-      services: 
+      services:
         - name: s1-def-health
           port: 80
         - name: s2-def-health
@@ -527,7 +510,7 @@ WebSocket support can be enabled on specific routes using the `EnableWebsockets`
 ```yaml
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
-metadata: 
+metadata:
   name: chat
   namespace: default
 spec:
@@ -535,13 +518,33 @@ spec:
     fqdn: chat.example.com
   routes:
     - match: /
-      services: 
+      services:
         - name: chat-app
           port: 80
     - match: /websocket
       enableWebsockets: true # Setting this to true enables websocket for all paths that match /websocket
       services:
         - name: chat-app
+          port: 80
+```
+
+#### Permit Insecure
+
+IngressRoutes support allowing HTTP alongside HTTPS. This way, the path responds to insecure requests over HTTP which are normally not permitted when a `virtualhost.tls` block is present.
+
+```yaml
+apiVersion: contour.heptio.com/v1beta1
+kind: IngressRoute
+metadata:
+  name: permit-insecure
+spec:
+  virtualhost:
+    fqdn: foo-basic.bar.com
+  routes:
+    - match: /
+      permitInsecure: true
+      services:
+        - name: s1
           port: 80
 ```
 
@@ -553,7 +556,7 @@ A key feature of the IngressRoute specification is route delegation which follow
 > Any nameserver can hold a record for `app.heptio.com`, but without the linkage from the parent `heptio.com` nameserver, its information is unreachable and non authoritative.
 
 The "root" IngressRoute is the only entry point for an ingress virtual host and is used as the top level configuration of a cluster's ingress resources.
-Each root IngressRoute defines a `virtualhost` key, which describes properties such as the fully qualified name of the virtual host, any aliases of the virtual host (for example, a www. prefix), TLS configuration, etc.
+Each root IngressRoute defines a `virtualhost` key, which describes properties such as the fully qualified name of the virtual host, TLS configuration, etc.
 
 IngressRoutes that have been delegated to do not contain virtual host information, as they will inherit the properties of the parent IngressRoute.
 This permits the owner of an IngressRoute root to both delegate the authority to publish a service on a portion of the route space inside a virtual host, and to further delegate authority to publish and delegate.
@@ -575,7 +578,7 @@ kind: IngressRoute
 metadata:
   name: delegation-root
   namespace: default
-spec: 
+spec:
   virtualhost:
     fqdn: root.bar.com
   routes:
@@ -584,17 +587,17 @@ spec:
         - name: s1
           port: 80
     # delegate the path, `/service2` to the IngressRoute object in this namespace with the name `service2`
-    - match: /service2 
+    - match: /service2
       delegate:
         name: service2
 ---
 # service2.ingressroute.yaml
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
-metadata: 
+metadata:
   name: service2
   namespace: default
-spec: 
+spec:
   routes:
     - match: /service2
       services:
@@ -604,6 +607,54 @@ spec:
       services:
         - name: blog
           port: 80
+```
+
+### Virtualhost aliases
+
+To present the same set of routes under multiple dns entries, for example www.example.com and example.com, delegation of the root route, `/` can be used.
+
+```yaml
+apiVersion: contour.heptio.com/v1beta1
+kind: IngressRoute
+metadata:
+  name: www-example-com
+  namespace: default
+spec:
+  virtualhost:
+    fqdn: www.example.com
+  routes:
+    - match: /
+      delegate:
+        name: example-root
+---
+apiVersion: contour.heptio.com/v1beta1
+kind: IngressRoute
+metadata:
+  name: example-com
+  namespace: default
+spec:
+  virtualhost:
+    fqdn: example.com
+  routes:
+    - match: /
+      delegate:
+        name: example-root
+---
+apiVersion: contour.heptio.com/v1beta1
+kind: IngressRoute
+metadata:
+  name: example-root
+  namespace: default
+spec:
+  routes:
+    - match: /
+      services:
+        - name: example-service
+          port: 8080
+    - match: /static
+      services:
+        - name: example-static
+          port: 8080
 ```
 
 ### Across namespaces
@@ -617,19 +668,19 @@ In this example, the root IngressRoute has delegated configuration of paths matc
 # root.ingressroute.yaml
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
-metadata: 
+metadata:
   name: namespace-delegation-root
   namespace: default
-spec: 
+spec:
   virtualhost:
     fqdn: ns-root.bar.com
-  routes: 
+  routes:
     - match: /
-      services: 
+      services:
         - name: s1
           port: 80
 # delegate the subpath, `/blog` to the IngressRoute object in the marketing namespace with the name `blog`
-    - match: /blog 
+    - match: /blog
       delegate:
         name: blog
         namespace: marketing
@@ -637,13 +688,13 @@ spec:
 # blog.ingressroute.yaml
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
-metadata: 
+metadata:
   name: blog
   namespace: marketing
-spec: 
-  routes: 
+spec:
+  routes:
     - match: /blog
-      services: 
+      services:
         - name: s2
           port: 80
 ```
@@ -663,7 +714,7 @@ This restricted mode is enabled in Contour by specifying a command line flag, `-
 
 IngressRoutes with a defined `virtualhost` field that are not in one of the allowed root namespaces will be flagged as `invalid` and will be ignored by Contour.
 
-> **NOTE: The restricted root namespace feature is only supported for IngressRoute CRDs.  
+> **NOTE: The restricted root namespace feature is only supported for IngressRoute CRDs.
 > `--ingressroute-root-namespaces` does not affect the operation of `v1beta1.Ingress` objects**
 
 ## Status Reporting

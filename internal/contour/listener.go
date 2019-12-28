@@ -222,10 +222,10 @@ func (v *listenerVisitor) Visit() map[string]*v2.Listener {
 				return
 			}
 			if vh.Port == 443 {
-				logrus.Info("Creating 443 virtual host", vh.FQDN())
+				logrus.Info("Creating 443 virtual host", vh.Host)
 				fc := listener.FilterChain{
 					FilterChainMatch: &listener.FilterChainMatch{
-						SniDomains: []string{vh.FQDN()},
+						SniDomains: []string{vh.Host},
 					},
 					TlsContext: tlscontext(data, vh.MinProtoVersion, "h2", "http/1.1"),
 					Filters:    filters,
@@ -235,7 +235,7 @@ func (v *listenerVisitor) Visit() map[string]*v2.Listener {
 				}
 				ingress_https.FilterChains = append(ingress_https.FilterChains, fc)
 			} else {
-				logrus.Info("TCP port virtual host: ", vh.FQDN(), " | ", vh.Port)
+				logrus.Info("TCP port virtual host: ", vh.Host, " | ", vh.Port)
 				tcp[vh.Port] = vh
 			}
 		}

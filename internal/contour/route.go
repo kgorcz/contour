@@ -17,7 +17,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -112,14 +111,10 @@ func (v *routeVisitor) Visit() map[string]*v2.RouteConfiguration {
 	v.Visitable.Visit(func(vh dag.Vertex) {
 		switch vh := vh.(type) {
 		case *dag.VirtualHost:
-			hostname := vh.FQDN()
-			aliases := vh.Aliases()
-			domains := append(aliases, hostname)
+			hostname := vh.Host
+			domains := []string{hostname}
 			if hostname != "*" {
 				domains = append(domains, hostname+":80")
-				for _, a := range aliases {
-					domains = append(domains, a+":80")
-				}
 			}
 			vhost := route.VirtualHost{
 				Name:    hashname(60, hostname),
@@ -139,11 +134,8 @@ func (v *routeVisitor) Visit() map[string]*v2.RouteConfiguration {
 						return
 					}
 					rr := route.Route{
-						Match: prefixmatch(r.Prefix()),
-						Action: actionroute(
-							svcs,
-							r.Websocket,
-							r.Timeout),
+						Match:  prefixmatch(r.Prefix),
+						Action: actionroute(r, svcs),
 					}
 
 					if r.HTTPSUpgrade {
@@ -162,14 +154,10 @@ func (v *routeVisitor) Visit() map[string]*v2.RouteConfiguration {
 			sort.Stable(sort.Reverse(longestRouteFirst(vhost.Routes)))
 			ingress_http.VirtualHosts = append(ingress_http.VirtualHosts, vhost)
 		case *dag.SecureVirtualHost:
-			hostname := vh.FQDN()
-			aliases := vh.Aliases()
-			domains := append(aliases, hostname)
+			hostname := vh.Host
+			domains := []string{hostname}
 			if hostname != "*" {
 				domains = append(domains, hostname+":443")
-				for _, a := range aliases {
-					domains = append(domains, a+":443")
-				}
 			}
 			vhost := route.VirtualHost{
 				Name:    hashname(60, hostname),
@@ -189,11 +177,8 @@ func (v *routeVisitor) Visit() map[string]*v2.RouteConfiguration {
 						return
 					}
 					vhost.Routes = append(vhost.Routes, route.Route{
-						Match: prefixmatch(r.Prefix()),
-						Action: actionroute(
-							svcs,
-							r.Websocket,
-							r.Timeout),
+						Match:  prefixmatch(r.Prefix),
+						Action: actionroute(r, svcs),
 					})
 				}
 			})
@@ -248,7 +233,7 @@ func prefixmatch(prefix string) route.RouteMatch {
 
 // action computes the cluster route action, a *route.Route_route for the
 // supplied ingress and backend.
-func actionroute(services []*dag.Service, ws bool, timeout time.Duration) *route.Route_Route {
+func actionroute(r *dag.Route, services []*dag.Service) *route.Route_Route {
 	rr := route.Route_Route{
 		Route: &route.RouteAction{
 			ClusterSpecifier: &route.RouteAction_WeightedClusters{
@@ -266,11 +251,24 @@ func actionroute(services []*dag.Service, ws bool, timeout time.Duration) *route
 		clusters.TotalWeight.Value = uint32(len(clusters.Clusters))
 	}
 
-	if ws {
-		rr.Route.UseWebsocket = &types.BoolValue{Value: ws}
+	if r.Websocket {
+		rr.Route.UseWebsocket = &types.BoolValue{Value: true}
 	}
 
-	switch timeout {
+	if r.RetryOn != "" {
+		rr.Route.RetryPolicy = &route.RouteAction_RetryPolicy{
+			RetryOn: r.RetryOn,
+		}
+		if r.NumRetries > 0 {
+			rr.Route.RetryPolicy.NumRetries = &types.UInt32Value{Value: uint32(r.NumRetries)}
+		}
+		if r.PerTryTimeout > 0 {
+			timeout := r.PerTryTimeout
+			rr.Route.RetryPolicy.PerTryTimeout = &timeout
+		}
+	}
+
+	switch timeout := r.Timeout; timeout {
 	case 0:
 		// no timeout specified, do nothing
 	case -1:
@@ -291,7 +289,7 @@ func weightedclusters(services []*dag.Service) *route.WeightedCluster {
 	for _, svc := range services {
 		total += svc.Weight
 		wc.Clusters = append(wc.Clusters, &route.WeightedCluster_ClusterWeight{
-			Name:   hashname(60, svc.Namespace(), svc.Name(), strconv.Itoa(int(svc.Port))),
+			Name:   clustername(svc),
 			Weight: &types.UInt32Value{Value: uint32(svc.Weight)},
 		})
 	}

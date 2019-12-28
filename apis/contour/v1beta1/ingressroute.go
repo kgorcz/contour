@@ -32,15 +32,10 @@ type VirtualHost struct {
 	// The fully qualified domain name of the root of the ingress tree
 	// all leaves of the DAG rooted at this object relate to the fqdn (and its aliases)
 	Fqdn string `json:"fqdn"`
-	// A set of aliases for the domain, these may be alternative fqdns which are considered
-	// aliases of the primary fqdn
-	Aliases []string `json:"aliases"`
 	// If present describes tls properties. The CNI names that will be matched on
 	// are described in fqdn and aliases, the tls.secretName secret must contain a
 	// matching certificate
 	TLS *TLS `json:"tls"`
-	// If set to true, this virtual host will only be accessible via HTTPS.
-	HTTPSOnly bool `json:"httpsOnly"`
 	Port int  `json:"port"`
 }
 
@@ -64,6 +59,9 @@ type Route struct {
 	Delegate `json:"delegate"`
 	// Enables websocket support for the route
 	EnableWebsockets bool `json:"enableWebsockets"`
+	// Allow this path to respond to insecure requests over HTTP which are normally
+	// not permitted when a `virtualhost.tls` block is present.
+	PermitInsecure bool `json:"permitInsecure"`
 }
 
 // Service defines an upstream to proxy traffic to

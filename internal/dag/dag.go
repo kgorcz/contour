@@ -49,8 +49,8 @@ func (d *DAG) Statuses() []Status {
 }
 
 type Route struct {
-	path     string
-	Object   interface{} // one of Ingress or IngressRoute
+	Prefix   string
+	object   interface{} // one of Ingress or IngressRoute
 	services map[servicemeta]*Service
 
 	// Should this route generate a 301 upgrade if accessed
@@ -66,16 +66,24 @@ type Route struct {
 	// A timeout of -1 represents "infinity"
 	// TODO(dfc) should this move to service?
 	Timeout time.Duration
+
+	// RetryOn specifies the conditions under which retry takes place.
+	// If empty, retries will not be performed.
+	RetryOn string
+
+	// NumRetries specifies the allowed number of retries.
+	// Ignored if RetryOn is blank, or defaults to 1 if RetryOn is set.
+	NumRetries int
+
+	// PerTryTimeout specifies the timeout per retry attempt.
+	// Ignored if RetryOn is blank.
+	PerTryTimeout time.Duration
 }
 
-func (r *Route) Prefix() string { return r.path }
-
-func (r *Route) addService(s *Service, hc *ingressroutev1.HealthCheck, lbStrat string) {
+func (r *Route) addService(s *Service) {
 	if r.services == nil {
 		r.services = make(map[servicemeta]*Service)
 	}
-	s.HealthCheck = hc
-	s.LoadBalancerStrategy = lbStrat
 	r.services[s.toMeta()] = s
 }
 
@@ -92,21 +100,16 @@ type VirtualHost struct {
 	// if the VirtualHost is generated inside Contour.
 	Port int
 
-	host    string
-	aliases []string
-	routes  map[string]*Route
+	Host   string
+	routes map[string]*Route
 }
 
 func (v *VirtualHost) addRoute(route *Route) {
 	if v.routes == nil {
 		v.routes = make(map[string]*Route)
 	}
-	v.routes[route.path] = route
+	v.routes[route.Prefix] = route
 }
-
-func (v *VirtualHost) FQDN() string { return v.host }
-
-func (v *VirtualHost) Aliases() []string { return v.aliases }
 
 func (v *VirtualHost) Visit(f func(Vertex)) {
 	for _, r := range v.routes {
@@ -116,25 +119,12 @@ func (v *VirtualHost) Visit(f func(Vertex)) {
 
 // A SecureVirtualHost represents a HTTP host protected by TLS.
 type SecureVirtualHost struct {
-	// Port is the port that the VirtualHost will listen on.
-	// Expected values are 80 and 443, but others are possible
-	// if the VirtualHost is generated inside Contour.
-	Port int
+	VirtualHost
 
 	// TLS minimum protocol version. Defaults to auth.TlsParameters_TLS_AUTO
 	MinProtoVersion auth.TlsParameters_TlsProtocol
 
-	host    string
-	aliases []string
-	routes  map[string]*Route
-	secret  *Secret
-}
-
-func (s *SecureVirtualHost) addRoute(route *Route) {
-	if s.routes == nil {
-		s.routes = make(map[string]*Route)
-	}
-	s.routes[route.path] = route
+	secret *Secret
 }
 
 func (s *SecureVirtualHost) Data() map[string][]byte {
@@ -144,14 +134,8 @@ func (s *SecureVirtualHost) Data() map[string][]byte {
 	return s.secret.Data()
 }
 
-func (s *SecureVirtualHost) FQDN() string { return s.host }
-
-func (s *SecureVirtualHost) Aliases() []string { return s.aliases }
-
 func (s *SecureVirtualHost) Visit(f func(Vertex)) {
-	for _, r := range s.routes {
-		f(r)
-	}
+	s.VirtualHost.Visit(f)
 	f(s.secret)
 }
 
@@ -201,18 +185,22 @@ func (s *Service) Namespace() string  { return s.Object.Namespace }
 func (s *Service) Visit(func(Vertex)) {}
 
 type servicemeta struct {
-	name      string
-	namespace string
-	port      int32
-	weight    int
+	name        string
+	namespace   string
+	port        int32
+	weight      int
+	strategy    string
+	healthcheck string // %#v of *ingressroutev1.HealthCheck
 }
 
 func (s *Service) toMeta() servicemeta {
 	return servicemeta{
-		name:      s.Object.Name,
-		namespace: s.Object.Namespace,
-		port:      s.Port,
-		weight:    s.Weight,
+		name:        s.Object.Name,
+		namespace:   s.Object.Namespace,
+		port:        s.Port,
+		weight:      s.Weight,
+		strategy:    s.LoadBalancerStrategy,
+		healthcheck: healthcheckToString(s.HealthCheck),
 	}
 }
 

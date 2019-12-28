@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/heptio/contour/internal/dag"
+	"github.com/heptio/contour/internal/metrics"
 	"github.com/sirupsen/logrus"
 )
 
@@ -32,9 +33,9 @@ const (
 // A HoldoffNotifier delays calls to OnChange in the hope of
 // coalescing rapid calls into a single update.
 type HoldoffNotifier struct {
-
 	// Notifier to be called after delay.
 	Notifier
+	*metrics.Metrics
 
 	logrus.FieldLogger
 
@@ -55,6 +56,7 @@ func (hn *HoldoffNotifier) OnChange(builder *dag.Builder) {
 		hn.WithField("last update", since).Info("forcing update")
 		hn.Notifier.OnChange(builder)
 		hn.last = time.Now()
+		hn.Metrics.SetDAGRebuiltMetric(hn.last.Unix())
 		return
 	}
 
@@ -65,5 +67,6 @@ func (hn *HoldoffNotifier) OnChange(builder *dag.Builder) {
 		hn.WithField("last update", time.Since(hn.last)).Info("performing delayed update")
 		hn.Notifier.OnChange(builder)
 		hn.last = time.Now()
+		hn.Metrics.SetDAGRebuiltMetric(hn.last.Unix())
 	})
 }

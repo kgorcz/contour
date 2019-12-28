@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"k8s.io/api/core/v1"
 	"k8s.io/api/extensions/v1beta1"
@@ -153,9 +154,17 @@ type builder struct {
 
 // lookupService returns a Service that matches the meta and port supplied.
 // If no matching Service is found lookup returns nil.
-func (b *builder) lookupService(m meta, port intstr.IntOrString, weight int) *Service {
+func (b *builder) lookupService(m meta, port intstr.IntOrString, weight int, strategy string, hc *ingressroutev1.HealthCheck) *Service {
 	if port.Type == intstr.Int {
-		if s, ok := b.services[servicemeta{name: m.name, namespace: m.namespace, port: int32(port.IntValue()), weight: weight}]; ok {
+		m := servicemeta{
+			name:        m.name,
+			namespace:   m.namespace,
+			port:        int32(port.IntValue()),
+			weight:      weight,
+			strategy:    strategy,
+			healthcheck: healthcheckToString(hc),
+		}
+		if s, ok := b.services[m]; ok {
 			return s
 		}
 	}
@@ -166,16 +175,20 @@ func (b *builder) lookupService(m meta, port intstr.IntOrString, weight int) *Se
 	for i := range svc.Spec.Ports {
 		p := &svc.Spec.Ports[i]
 		if int(p.Port) == port.IntValue() {
-			return b.addService(svc, p, weight)
+			return b.addService(svc, p, weight, strategy, hc)
 		}
 		if port.String() == p.Name {
-			return b.addService(svc, p, weight)
+			return b.addService(svc, p, weight, strategy, hc)
 		}
 	}
 	return nil
 }
 
-func (b *builder) addService(svc *v1.Service, port *v1.ServicePort, weight int) *Service {
+func healthcheckToString(hc *ingressroutev1.HealthCheck) string {
+	return fmt.Sprintf("%#v", hc)
+}
+
+func (b *builder) addService(svc *v1.Service, port *v1.ServicePort, weight int, strategy string, hc *ingressroutev1.HealthCheck) *Service {
 	if b.services == nil {
 		b.services = make(map[servicemeta]*Service)
 	}
@@ -186,10 +199,12 @@ func (b *builder) addService(svc *v1.Service, port *v1.ServicePort, weight int) 
 	}
 
 	s := &Service{
-		Object:      svc,
-		ServicePort: port,
-		Protocol:    protocol,
-		Weight:      weight,
+		Object:               svc,
+		ServicePort:          port,
+		Protocol:             protocol,
+		Weight:               weight,
+		LoadBalancerStrategy: strategy,
+		HealthCheck:          hc,
 
 		MaxConnections:     parseAnnotation(svc.Annotations, annotationMaxConnections),
 		MaxPendingRequests: parseAnnotation(svc.Annotations, annotationMaxPendingRequests),
@@ -223,8 +238,8 @@ func (b *builder) lookupVirtualHost(host string, port int) *VirtualHost {
 	vh, ok := b.vhosts[hp]
 	if !ok {
 		vh = &VirtualHost{
+			Host: host,
 			Port: port,
-			host: host,
 		}
 		if b.vhosts == nil {
 			b.vhosts = make(map[hostport]*VirtualHost)
@@ -239,8 +254,10 @@ func (b *builder) lookupSecureVirtualHost(host string, port int) *SecureVirtualH
 	svh, ok := b.svhosts[hp]
 	if !ok {
 		svh = &SecureVirtualHost{
-			Port: port,
-			host: host,
+			VirtualHost: VirtualHost{
+				Host: host,
+				Port: port,
+			},
 		}
 		if b.svhosts == nil {
 			b.svhosts = make(map[hostport]*SecureVirtualHost)
@@ -269,16 +286,7 @@ func (b *builder) compute() *DAG {
 				for _, host := range tls.Hosts {
 					svhost := b.lookupSecureVirtualHost(host, 443)
 					svhost.secret = sec
-					// process annotations
-					switch ing.ObjectMeta.Annotations["contour.heptio.com/tls-minimum-protocol-version"] {
-					case "1.3":
-						svhost.MinProtoVersion = auth.TlsParameters_TLSv1_3
-					case "1.2":
-						svhost.MinProtoVersion = auth.TlsParameters_TLSv1_2
-					default:
-						// any other value is interpreted as TLS/1.1
-						svhost.MinProtoVersion = auth.TlsParameters_TLSv1_1
-					}
+					svhost.MinProtoVersion = minProtoVersion(ing)
 				}
 			}
 		}
@@ -286,57 +294,43 @@ func (b *builder) compute() *DAG {
 
 	// deconstruct each ingress into routes and virtualhost entries
 	for _, ing := range b.source.ingresses {
-		// should we create port 80 routes for this ingress
-		httpAllowed := httpAllowed(ing)
-
-		// compute websocket enabled routes
-		wr := websocketRoutes(ing)
-
-		// compute timeout for any routes on this ingress
-		timeout := parseAnnotationTimeout(ing.Annotations, annotationRequestTimeout)
-
-		if ing.Spec.Backend != nil {
-			// handle the annoying default ingress
-			r := &Route{
-				path:         "/",
-				Object:       ing,
-				HTTPSUpgrade: tlsRequired(ing),
-				Websocket:    wr["/"],
-				Timeout:      timeout,
+		// rewrite the default ingress to a stock ingress rule.
+		rules := ing.Spec.Rules
+		if backend := ing.Spec.Backend; backend != nil {
+			rule := v1beta1.IngressRule{
+				IngressRuleValue: v1beta1.IngressRuleValue{
+					HTTP: &v1beta1.HTTPIngressRuleValue{
+						Paths: []v1beta1.HTTPIngressPath{{
+							Backend: v1beta1.IngressBackend{
+								ServiceName: backend.ServiceName,
+								ServicePort: backend.ServicePort,
+							},
+						}},
+					},
+				},
 			}
-			m := meta{name: ing.Spec.Backend.ServiceName, namespace: ing.Namespace}
-			if s := b.lookupService(m, ing.Spec.Backend.ServicePort, 0); s != nil {
-				r.addService(s, nil, "")
-			}
-			if httpAllowed {
-				b.lookupVirtualHost("*", 80).addRoute(r)
-			}
+			rules = append(rules, rule)
 		}
 
-		for _, rule := range ing.Spec.Rules {
-			// handle Spec.Rule declarations
+		for _, rule := range rules {
 			host := rule.Host
 			if host == "" {
 				host = "*"
 			}
 			for _, httppath := range httppaths(rule) {
-				path := httppath.Path
-				if path == "" {
-					path = "/"
-				}
-				r := &Route{
-					path:         path,
-					Object:       ing,
-					HTTPSUpgrade: tlsRequired(ing),
-					Websocket:    wr[path],
-					Timeout:      timeout,
+				prefix := httppath.Path
+				if prefix == "" {
+					prefix = "/"
 				}
 
+				r := prefixRoute(ing, prefix)
 				m := meta{name: httppath.Backend.ServiceName, namespace: ing.Namespace}
-				if s := b.lookupService(m, httppath.Backend.ServicePort, 0); s != nil {
-					r.addService(s, nil, "")
+				if s := b.lookupService(m, httppath.Backend.ServicePort, 0, "", nil); s != nil {
+					r.addService(s)
 				}
-				if httpAllowed {
+
+				// should we create port 80 routes for this ingress
+				if httpAllowed(ing) {
 					b.lookupVirtualHost(host, 80).addRoute(r)
 				}
 				if _, ok := b.svhosts[hostport{host: host, port: 443}]; ok && host != "*" {
@@ -361,22 +355,20 @@ func (b *builder) compute() *DAG {
 		}
 
 		host := ir.Spec.VirtualHost.Fqdn
-		if len(strings.TrimSpace(host)) == 0 {
+		if isBlank(host) {
 			b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: "Spec.VirtualHost.Fqdn must be specified"})
 			continue
 		}
 
-		// lookup vhost to populate its aliases
-		vhost := b.lookupVirtualHost(host, 80)
-		vhost.aliases = ir.Spec.VirtualHost.Aliases
-
+		enforceTLS := false
 		if tls := ir.Spec.VirtualHost.TLS; tls != nil {
 			// attach secrets to TLS enabled vhosts
 			m := meta{name: tls.SecretName, namespace: ir.Namespace}
 			if sec := b.lookupSecret(m); sec != nil {
 				svhost := b.lookupSecureVirtualHost(host, ir.Spec.VirtualHost.Port)
 				svhost.secret = sec
-				svhost.aliases = ir.Spec.VirtualHost.Aliases
+				enforceTLS = true
+
 				// process min protocol version
 				switch ir.Spec.VirtualHost.TLS.MinimumProtocolVersion {
 				case "1.3":
@@ -390,10 +382,54 @@ func (b *builder) compute() *DAG {
 			}
 		}
 
-		b.processIngressRoute(ir, "", nil, host, ir.Spec.VirtualHost.HTTPSOnly)
+		b.processIngressRoute(ir, "", nil, host, enforceTLS)
 	}
 
 	return b.DAG()
+}
+
+// prefixRoute returns a new dag.Route for the (ingress,prefix) tuple.
+func prefixRoute(ingress *v1beta1.Ingress, prefix string) *Route {
+	// compute websocket enabled routes
+	wr := websocketRoutes(ingress)
+
+	// compute timeout for any routes on this ingress
+	timeout := parseAnnotationTimeout(ingress.Annotations, annotationRequestTimeout)
+
+	var perTryTimeout time.Duration
+	if val, ok := ingress.Annotations[annotationPerTryTimeout]; ok {
+		perTryTimeout, _ = time.ParseDuration(val)
+	}
+
+	return &Route{
+		Prefix:        prefix,
+		object:        ingress,
+		HTTPSUpgrade:  tlsRequired(ingress),
+		Websocket:     wr[prefix],
+		Timeout:       timeout,
+		RetryOn:       ingress.Annotations[annotationRetryOn],
+		NumRetries:    parseAnnotation(ingress.Annotations, annotationNumRetries),
+		PerTryTimeout: perTryTimeout,
+	}
+}
+
+// isBlank indicates if a string contains nothing but blank characters.
+func isBlank(s string) bool {
+	return len(strings.TrimSpace(s)) == 0
+}
+
+// minProtoVersion returns the TLS protocol version specified by an ingress annotation
+// or default if non present.
+func minProtoVersion(i *v1beta1.Ingress) auth.TlsParameters_TlsProtocol {
+	switch i.Annotations["contour.heptio.com/tls-minimum-protocol-version"] {
+	case "1.3":
+		return auth.TlsParameters_TLSv1_3
+	case "1.2":
+		return auth.TlsParameters_TLSv1_2
+	default:
+		// any other value is interpreted as TLS/1.1
+		return auth.TlsParameters_TLSv1_1
+	}
 }
 
 // validIngressRoutes returns a slice of *ingressroutev1.IngressRoute objects.
@@ -483,7 +519,7 @@ func (b *builder) rootAllowed(ir *ingressroutev1.IngressRoute) bool {
 	return false
 }
 
-func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMatch string, visited []*ingressroutev1.IngressRoute, host string, httpsOnly bool) {
+func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMatch string, visited []*ingressroutev1.IngressRoute, host string, enforceTLS bool) {
 	visited = append(visited, ir)
 
 	for _, route := range ir.Spec.Routes {
@@ -498,10 +534,15 @@ func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMat
 				b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("the path prefix %q does not match the parent's path prefix %q", route.Match, prefixMatch), Vhost: host})
 				return
 			}
+
+			// Determine if the route should enforce TLS
+			enforceTLSRoute := routeEnforceTLS(enforceTLS, route.PermitInsecure)
+
 			r := &Route{
-				path:      route.Match,
-				Object:    ir,
-				Websocket: route.EnableWebsockets,
+				Prefix:       route.Match,
+				object:       ir,
+				Websocket:    route.EnableWebsockets,
+				HTTPSUpgrade: enforceTLSRoute,
 			}
 			for _, s := range route.Services {
 				if s.Port < 1 || s.Port > 65535 {
@@ -513,19 +554,17 @@ func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMat
 					return
 				}
 				m := meta{name: s.Name, namespace: ir.Namespace}
-				if svc := b.lookupService(m, intstr.FromInt(s.Port), s.Weight); svc != nil {
-					r.addService(svc, s.HealthCheck, s.Strategy)
+				if svc := b.lookupService(m, intstr.FromInt(s.Port), s.Weight, s.Strategy, s.HealthCheck); svc != nil {
+					r.addService(svc)
 				}
 			}
 
-			if !httpsOnly {
-				b.lookupVirtualHost(host, irp.port).addRoute(r)
-			}
+			b.lookupVirtualHost(host, irp.port).addRoute(r)
 			b.lookupSecureVirtualHost(host, irp.port).addRoute(r)
 			continue
 		}
 
-		if route.Delegate.Name == "" {
+		if isBlank(route.Delegate.Name) {
 			// not a delegate route
 			continue
 		}
@@ -556,10 +595,21 @@ func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMat
 			}
 
 			// follow the link and process the target ingress route
-			b.processIngressRoute(dest, route.Match, visited, host, httpsOnly)
+			b.processIngressRoute(dest, route.Match, visited, host, enforceTLS)
 		}
 	}
 	b.setStatus(Status{Object: ir, Status: StatusValid, Description: "valid IngressRoute", Vhost: host})
+}
+
+// routeEnforceTLS determines if the route should redirect the user to a secure TLS listener
+func routeEnforceTLS(enforceTLS, permitInsecure bool) bool {
+	if enforceTLS {
+		if permitInsecure {
+			return false
+		}
+		return true
+	}
+	return false
 }
 
 // httppaths returns a slice of HTTPIngressPath values for a given IngressRule.

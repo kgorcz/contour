@@ -49,7 +49,7 @@ You can think of it as routing traffic to another ingress route for further proc
 This is an example of a fully populated root ingress route.
 
 ```yaml
-apiVersion: contour.heptio.com/v1alpha1
+apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
 metadata:
   name: google
@@ -94,6 +94,8 @@ spec:
     service:
     - name: google-static
       port: 9000
+    # If enforceTLS is specified, allows any request to this path to serve insecure requests
+    permitInsecure: true
   - match: /finance
     # delegate delegates the matching route to another IngressRoute object.
     # This delegates the responsibility for /finance to the IngressRoute matching the delegate parameters
@@ -125,7 +127,7 @@ spec:
 This is an example of the `google-finance` object which has been delegated responsibility for paths starting with `/finance`.
 
 ```yaml
-apiVersion: contour.heptio.com/v1alpha1
+apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
 metadata:
   name: google-finance
@@ -167,13 +169,6 @@ The following list are the options available to choose from:
 - **Random:** The random load balancer selects a random healthy host
 
 More documentation on Envoy's lb support can be found here: [https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/load_balancing.html](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/load_balancing.html)
-
-### TLS
-
-- **minimumProtocolVersion**: Define the minimum TLS version a vhost should negotiate. Allowed values:
-  - 1.3
-  - 1.2
-  - 1.1 (Default)
 
 ### Healthcheck
 
@@ -279,7 +274,7 @@ To publish a service in another namespace on a domain that you control, you must
 For example, the `kube-system/heptio` IngressRoute holds information about `heptio.com` but delegates the provision of the service to the `heptio-wordpress/wordpress` IngressRoute:
 
 ```yaml
-apiVersion: contour.heptio.com/v1alpha1
+apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
 metadata:
   name: heptio 
@@ -296,7 +291,7 @@ spec:
       name: wordpress
       namespace: heptio-wordpress
 ---
-apiVersion: contour.heptio.com/v1alpha1
+apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
 metadata:
   name: wordpress 
@@ -315,6 +310,20 @@ TLS configuration, certificates, and cipher suites, remain similar in form to th
 However, because the `spec.virtualhost.tls` is present only in root objects, there is no ambiguity as to which IngressRoute holds the canonical TLS information. (This cannot be said for the current Ingress object).
 This also implies that the IngressRoute root and the TLS Secret must live in the same namespace.
 However as mentioned above, the entire routespace (/ onwards) can be delegated to another namespace, which allows operators to define virtual hosts and their TLS configuration in one namespace, and delegate the operation of those virtual hosts to another namespace.
+
+Since defining a TLS section of a root IngressRoute tells Contour that it should set up a TLS listener and serve the provided TLS certificate/key, it's inherent that all requests be served over TLS. 
+This results in any request to an insecure endpoint will receive a 301 http status code informing the client to redirect to the secure endpoint. No additional parameters need to be set for this functionality other than specifying TLS on the IngressRoute.
+
+Additionally, it may be necessary to serve specific routes over an insecure endpoint. 
+An example would be the challenges sent from LetsEncyrpt. Specific routes can set the permitInsecure parameter which will let that route serve insecure or secure traffic (Meaning no 301 redirects).
+
+### Parameters
+
+- **secretName**: Name of secret containing certificate and key used to terminate TLS connections.
+- **minimumProtocolVersion**: Define the minimum TLS version a vhost should negotiate. Allowed values:
+  - 1.3
+  - 1.2
+  - 1.1 (Default)
 
 # Example Use-Cases
 
@@ -374,6 +383,7 @@ Metrics are essential to any system. Contour will expose a `/metrics` Prometheus
 - **contour_ingressroute_invalid_total (gauge):**  Number of `Invalid` IngressRoute objects
   - namespace
   - vhost
+- **contour_ingressroute_dagrebuild_timestamp (gauge):** Timestamp of the last DAG rebuild
 
 ## Envoy Metrics
 
