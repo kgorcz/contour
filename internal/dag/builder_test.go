@@ -650,7 +650,7 @@ func TestDAGInsert(t *testing.T) {
 			},
 			Routes: []ingressroutev1.Route{{
 				Match: "/blog",
-				Delegate: ingressroutev1.Delegate{
+				Delegate: &ingressroutev1.Delegate{
 					Name:      "blog",
 					Namespace: "marketing",
 				},
@@ -673,7 +673,7 @@ func TestDAGInsert(t *testing.T) {
 				}},
 			}, {
 				Match: "/blog/admin",
-				Delegate: ingressroutev1.Delegate{
+				Delegate: &ingressroutev1.Delegate{
 					Name:      "marketing-admin",
 					Namespace: "operations",
 				},
@@ -812,6 +812,33 @@ func TestDAGInsert(t *testing.T) {
 			}, {
 				Match:            "/websocket",
 				EnableWebsockets: true,
+				Services: []ingressroutev1.Service{{
+					Name: "kuard",
+					Port: 8080,
+				}},
+			}},
+		},
+	}
+
+	// ir11 has a prefix-rewrite route
+	ir11 := &ingressroutev1.IngressRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-com",
+			Namespace: "default",
+		},
+		Spec: ingressroutev1.IngressRouteSpec{
+			VirtualHost: &ingressroutev1.VirtualHost{
+				Fqdn: "example.com",
+			},
+			Routes: []ingressroutev1.Route{{
+				Match: "/",
+				Services: []ingressroutev1.Service{{
+					Name: "kuard",
+					Port: 8080,
+				}},
+			}, {
+				Match:         "/websocket",
+				PrefixRewrite: "/",
 				Services: []ingressroutev1.Service{{
 					Name: "kuard",
 					Port: 8080,
@@ -1718,6 +1745,35 @@ func TestDAGInsert(t *testing.T) {
 		},
 		"insert ingressroute with websocket route": {
 			objs: []interface{}{
+				ir11, s1,
+			},
+			want: []Vertex{
+				&VirtualHost{
+					Host: "example.com",
+					Port: 80,
+					routes: routemap(
+						route("/", ir11, servicemap(
+							&Service{
+								Object:      s1,
+								ServicePort: &s1.Spec.Ports[0],
+							},
+						)),
+						&Route{
+							Prefix: "/websocket",
+							object: ir11,
+							services: servicemap(
+								&Service{
+									Object:      s1,
+									ServicePort: &s1.Spec.Ports[0],
+								},
+							),
+							PrefixRewrite: "/",
+						},
+					),
+				}},
+		},
+		"insert ingressroute with prefix rewrite route": {
+			objs: []interface{}{
 				ir10, s1,
 			},
 			want: []Vertex{
@@ -2437,724 +2493,6 @@ func TestDAGInsert(t *testing.T) {
 	}
 }
 
-func TestDAGRemove(t *testing.T) {
-	// The DAG is sensitive to ordering, removing an ingress, then a service,
-	// has a different effect than removing a service, then an ingress.
-
-	i1 := &v1beta1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kuard",
-			Namespace: "default",
-		},
-		Spec: v1beta1.IngressSpec{
-			Backend: backend("kuard", intstr.FromInt(8080))},
-	}
-	// i2 is functionally identical to i1
-	i2 := &v1beta1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kuard",
-			Namespace: "default",
-		},
-		Spec: v1beta1.IngressSpec{
-			Rules: []v1beta1.IngressRule{{
-				IngressRuleValue: ingressrulevalue(backend("kuard", intstr.FromInt(8080))),
-			}},
-		},
-	}
-	// i3 is similar to i2 but includes a hostname on the ingress rule
-	i3 := &v1beta1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kuard",
-			Namespace: "default",
-		},
-		Spec: v1beta1.IngressSpec{
-			TLS: []v1beta1.IngressTLS{{
-				Hosts:      []string{"kuard.example.com"},
-				SecretName: "secret",
-			}},
-			Rules: []v1beta1.IngressRule{{
-				Host:             "kuard.example.com",
-				IngressRuleValue: ingressrulevalue(backend("kuard", intstr.FromInt(8080))),
-			}},
-		},
-	}
-	// i5 is functionally identical to i2
-	i5 := &v1beta1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kuard",
-			Namespace: "default",
-		},
-		Spec: v1beta1.IngressSpec{
-			Rules: []v1beta1.IngressRule{{
-				IngressRuleValue: ingressrulevalue(backend("kuard", intstr.FromString("http"))),
-			}},
-		},
-	}
-	// i6 contains two named vhosts which point to the same service
-	// one of those has TLS
-	i6 := &v1beta1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "two-vhosts",
-			Namespace: "default",
-		},
-		Spec: v1beta1.IngressSpec{
-			TLS: []v1beta1.IngressTLS{{
-				Hosts:      []string{"b.example.com"},
-				SecretName: "secret",
-			}},
-			Rules: []v1beta1.IngressRule{{
-				Host:             "a.example.com",
-				IngressRuleValue: ingressrulevalue(backend("kuard", intstr.FromInt(8080))),
-			}, {
-				Host:             "b.example.com",
-				IngressRuleValue: ingressrulevalue(backend("kuard", intstr.FromString("http"))),
-			}},
-		},
-	}
-	// i7 contains a single vhost with two paths
-	i7 := &v1beta1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "two-paths",
-			Namespace: "default",
-		},
-		Spec: v1beta1.IngressSpec{
-			TLS: []v1beta1.IngressTLS{{
-				Hosts:      []string{"b.example.com"},
-				SecretName: "secret",
-			}},
-			Rules: []v1beta1.IngressRule{{
-				Host: "b.example.com",
-				IngressRuleValue: v1beta1.IngressRuleValue{
-					HTTP: &v1beta1.HTTPIngressRuleValue{
-						Paths: []v1beta1.HTTPIngressPath{{
-							Backend: v1beta1.IngressBackend{
-								ServiceName: "kuard",
-								ServicePort: intstr.FromString("http"),
-							},
-						}, {
-							Path: "/kuarder",
-							Backend: v1beta1.IngressBackend{
-								ServiceName: "kuarder",
-								ServicePort: intstr.FromInt(8080),
-							},
-						}},
-					},
-				},
-			}},
-		},
-	}
-
-	ir1 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kuard",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "kuard.example.com",
-			},
-			Routes: []ingressroutev1.Route{{
-				Match:    "/",
-				Services: []ingressroutev1.Service{{Name: "kuard", Port: 8080}},
-			}},
-		},
-	}
-
-	// ir2 is similar to ir1, but it contains two backend services
-	ir2 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kuard",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "kuard.example.com",
-			},
-			Routes: []ingressroutev1.Route{{
-				Match:    "/",
-				Services: []ingressroutev1.Service{{Name: "kuard", Port: 8080}, {Name: "nginx", Port: 80}},
-			}},
-		},
-	}
-
-	// ir3 is similar to ir1, but it contains TLS configuration
-	ir3 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kuard",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "kuard.example.com",
-				TLS: &ingressroutev1.TLS{
-					SecretName: "secret",
-				},
-			},
-			Routes: []ingressroutev1.Route{{
-				Match:    "/",
-				Services: []ingressroutev1.Service{{Name: "kuard", Port: 8080}},
-			}},
-		},
-	}
-
-	ir4 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "two-vhosts",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "b.example.com",
-			},
-			Routes: []ingressroutev1.Route{{
-				Match:    "/",
-				Services: []ingressroutev1.Service{{Name: "kuard", Port: 8080}},
-			}},
-		},
-	}
-
-	// ir5 contains a single vhost with two paths
-	ir5 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "two-paths",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "b.example.com",
-			},
-			Routes: []ingressroutev1.Route{{
-				Match:    "/",
-				Services: []ingressroutev1.Service{{Name: "kuard", Port: 8080}},
-			}, {
-				Match:    "/kuarder",
-				Services: []ingressroutev1.Service{{Name: "kuarder", Port: 8080}},
-			}},
-		},
-	}
-
-	// ir6 contains a single vhost that delegates to ir7
-	ir6 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "delegate",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "b.example.com",
-			},
-			Routes: []ingressroutev1.Route{{
-				Match:    "/",
-				Delegate: ingressroutev1.Delegate{Name: "delegated"},
-			}},
-		},
-	}
-
-	// ir7 is a delegated ingressroute with a single route pointing to s1
-	ir7 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "delegated",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			Routes: []ingressroutev1.Route{{
-				Match:    "/",
-				Services: []ingressroutev1.Service{{Name: "kuard", Port: 8080}},
-			}},
-		},
-	}
-
-	s1 := &v1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kuard",
-			Namespace: "default",
-		},
-		Spec: v1.ServiceSpec{
-			Ports: []v1.ServicePort{{
-				Name:       "http",
-				Protocol:   "TCP",
-				Port:       8080,
-				TargetPort: intstr.FromInt(8080),
-			}},
-		},
-	}
-	// s2 is like s1 but with a different name
-	s2 := &v1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kuarder",
-			Namespace: "default",
-		},
-		Spec: v1.ServiceSpec{
-			Ports: []v1.ServicePort{{
-				Name:       "http",
-				Protocol:   "TCP",
-				Port:       8080,
-				TargetPort: intstr.FromInt(8080),
-			}},
-		},
-	}
-
-	sec1 := &v1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "secret",
-			Namespace: "default",
-		},
-		Data: secretdata("certificate", "key"),
-	}
-
-	tests := map[string]struct {
-		insert []interface{}
-		remove []interface{}
-		want   []Vertex
-	}{
-		"remove ingress w/ default backend": {
-			insert: []interface{}{
-				i1,
-			},
-			remove: []interface{}{
-				i1,
-			},
-			want: []Vertex{},
-		},
-		"remove ingress w/ single unnamed backend": {
-			insert: []interface{}{
-				i2,
-			},
-			remove: []interface{}{
-				i2,
-			},
-			want: []Vertex{},
-		},
-		"insert ingress w/ host name and single backend": {
-			insert: []interface{}{
-				i3,
-			},
-			want: []Vertex{
-				&VirtualHost{
-					Host: "kuard.example.com",
-					Port: 80,
-					routes: routemap(
-						route("/", i3),
-					),
-				}},
-		},
-		"remove ingress w/ default backend leaving matching service": {
-			insert: []interface{}{
-				i1,
-				s1,
-			},
-			remove: []interface{}{
-				i1,
-			},
-			want: []Vertex{},
-		},
-		"remove service leaving ingress w/ default backend": {
-			insert: []interface{}{
-				s1,
-				i1,
-			},
-			remove: []interface{}{
-				s1,
-			},
-			want: []Vertex{
-				&VirtualHost{
-					Host: "*",
-					Port: 80,
-					routes: routemap(
-						route("/", i1),
-					),
-				}},
-		},
-		"remove non matching service leaving ingress w/ default backend": {
-			insert: []interface{}{
-				i1,
-				s2,
-			},
-			remove: []interface{}{
-				s2,
-			},
-			want: []Vertex{
-				&VirtualHost{
-					Host: "*",
-					Port: 80,
-					routes: routemap(
-						route("/", i1),
-					),
-				}},
-		},
-		"remove ingress w/ default backend leaving non matching service": {
-			insert: []interface{}{
-				s2,
-				i1,
-			},
-			remove: []interface{}{
-				i1,
-			},
-			want: []Vertex{},
-		},
-		"remove service w/ named service port leaving ingress w/ single unnamed backend": {
-			insert: []interface{}{
-				i5,
-				s1,
-			},
-			remove: []interface{}{
-				s1,
-			},
-			want: []Vertex{
-				&VirtualHost{
-					Host: "*",
-					Port: 80,
-					routes: routemap(
-						route("/", i5),
-					),
-				}},
-		},
-		"remove secret leaving ingress w/ tls": {
-			insert: []interface{}{
-				sec1,
-				i3,
-			},
-			remove: []interface{}{
-				sec1,
-			},
-			want: []Vertex{
-				&VirtualHost{
-					Host: "kuard.example.com",
-					Port: 80,
-					routes: routemap(
-						route("/", i3),
-					),
-				}},
-		},
-		"remove ingress w/ two vhosts": {
-			insert: []interface{}{
-				i6,
-			},
-			remove: []interface{}{
-				i6,
-			},
-			want: []Vertex{},
-		},
-		"remove service leaving ingress w/ two vhosts": {
-			insert: []interface{}{
-				i6,
-				s1,
-			},
-			remove: []interface{}{
-				s1,
-			},
-			want: []Vertex{
-				&VirtualHost{
-					Host: "a.example.com",
-					Port: 80,
-					routes: routemap(
-						route("/", i6),
-					),
-				},
-				&VirtualHost{
-					Host: "b.example.com",
-					Port: 80,
-					routes: routemap(
-						route("/", i6),
-					),
-				}},
-		},
-		"remove secret from ingress w/ two vhosts and service": {
-			insert: []interface{}{
-				i6,
-				s1,
-				sec1,
-			},
-			remove: []interface{}{
-				sec1,
-			},
-			want: []Vertex{
-				&VirtualHost{
-					Host: "a.example.com",
-					Port: 80,
-					routes: routemap(
-						route("/", i6, servicemap(
-							&Service{
-								Object:      s1,
-								ServicePort: &s1.Spec.Ports[0],
-							},
-						)),
-					),
-				}, &VirtualHost{
-					Host: "b.example.com",
-					Port: 80,
-					routes: routemap(
-						route("/", i6, servicemap(
-							&Service{
-								Object:      s1,
-								ServicePort: &s1.Spec.Ports[0],
-							},
-						)),
-					),
-				}},
-		},
-		"remove service from ingress w/ two vhosts and secret": {
-			insert: []interface{}{
-				s1,
-				sec1,
-				i6,
-			},
-			remove: []interface{}{
-				s1,
-			},
-			want: []Vertex{
-				&VirtualHost{
-					Host: "a.example.com",
-					Port: 80,
-					routes: routemap(
-						route("/", i6),
-					),
-				},
-				&VirtualHost{
-					Host: "b.example.com",
-					Port: 80,
-					routes: routemap(
-						route("/", i6),
-					),
-				},
-				&SecureVirtualHost{
-					VirtualHost: VirtualHost{
-						Host: "b.example.com",
-						Port: 443,
-						routes: routemap(
-							route("/", i6),
-						),
-					},
-					MinProtoVersion: auth.TlsParameters_TLSv1_1,
-					secret: &Secret{
-						object: sec1,
-					},
-				}},
-		},
-		"remove service from ingress w/ two paths": {
-			insert: []interface{}{
-				i7,
-				s2,
-				s1,
-			},
-			remove: []interface{}{
-				s2,
-			},
-			want: []Vertex{
-				&VirtualHost{
-					Host: "b.example.com",
-					Port: 80,
-					routes: routemap(
-						route("/", i7, servicemap(
-							&Service{
-								Object:      s1,
-								ServicePort: &s1.Spec.Ports[0],
-							},
-						)),
-						route("/kuarder", i7),
-					),
-				}},
-		},
-		"remove ingressroute w/ default backend": {
-			insert: []interface{}{
-				ir1,
-			},
-			remove: []interface{}{
-				ir1,
-			},
-			want: []Vertex{},
-		},
-		"remove ingressroute w/ two backends": {
-			insert: []interface{}{
-				ir2,
-			},
-			remove: []interface{}{
-				ir2,
-			},
-			want: []Vertex{},
-		},
-		"remove ingressroute w/ default backend leaving matching service": {
-			insert: []interface{}{
-				ir1,
-				s1,
-			},
-			remove: []interface{}{
-				ir1,
-			},
-			want: []Vertex{},
-		},
-		"remove service leaving ingressroute w/ default backend": {
-			insert: []interface{}{
-				s1,
-				ir1,
-			},
-			remove: []interface{}{
-				s1,
-			},
-			want: []Vertex{
-				&VirtualHost{
-					Host: "kuard.example.com",
-					Port: 80,
-					routes: routemap(
-						route("/", ir1),
-					),
-				}},
-		},
-		"remove non matching service leaving ingressroute w/ default backend": {
-			insert: []interface{}{
-				ir1,
-				s2,
-			},
-			remove: []interface{}{
-				s2,
-			},
-			want: []Vertex{
-				&VirtualHost{
-					Host: "kuard.example.com",
-					Port: 80,
-					routes: routemap(
-						route("/", ir1),
-					),
-				}},
-		},
-		"remove ingressroute w/ default backend leaving non matching service": {
-			insert: []interface{}{
-				s2,
-				ir1,
-			},
-			remove: []interface{}{
-				ir1,
-			},
-			want: []Vertex{},
-		},
-		"remove secret leaving ingressroute w/ tls": {
-			insert: []interface{}{
-				sec1,
-				ir3,
-			},
-			remove: []interface{}{
-				sec1,
-			},
-			want: []Vertex{
-				&VirtualHost{
-					Host: "kuard.example.com",
-					Port: 80,
-					routes: routemap(
-						route("/", ir3),
-					),
-				}},
-		},
-		"remove ingressroute w/ two vhosts": {
-			insert: []interface{}{
-				ir4,
-			},
-			remove: []interface{}{
-				ir4,
-			},
-			want: []Vertex{},
-		},
-		"remove service from ingressroute w/ two paths": {
-			insert: []interface{}{
-				ir5,
-				s2,
-				s1,
-			},
-			remove: []interface{}{
-				s2,
-			},
-			want: []Vertex{
-				&VirtualHost{
-					Host: "b.example.com",
-					Port: 80,
-					routes: routemap(
-						route("/", ir5, servicemap(
-							&Service{
-								Object:      s1,
-								ServicePort: &s1.Spec.Ports[0],
-							},
-						)),
-						route("/kuarder", ir5),
-					),
-				}},
-		},
-		"delegated ingressroute: remove parent ingressroute": {
-			insert: []interface{}{
-				ir6, ir7, s1,
-			},
-			remove: []interface{}{
-				ir6,
-			},
-			want: []Vertex{},
-		},
-		"delegated ingressroute: remove child ingressroute": {
-			insert: []interface{}{
-				ir6, ir7, s1,
-			},
-			remove: []interface{}{
-				ir7,
-			},
-			want: []Vertex{},
-		},
-		"delegated ingressroute: remove service that matches child ingressroute": {
-			insert: []interface{}{
-				ir6, ir7, s1,
-			},
-			remove: []interface{}{
-				s1,
-			},
-			want: []Vertex{
-				&VirtualHost{
-					Host: "b.example.com",
-					Port: 80,
-					routes: routemap(
-						route("/", ir7),
-					),
-				},
-			},
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			var b Builder
-			for _, o := range tc.insert {
-				b.Insert(o)
-			}
-			for _, o := range tc.remove {
-				b.Remove(o)
-			}
-			dag := b.Build()
-
-			got := make(map[hostport]Vertex)
-			dag.Visit(func(v Vertex) {
-				switch v := v.(type) {
-				case *VirtualHost:
-					got[hostport{host: v.Host, port: v.Port}] = v
-				case *SecureVirtualHost:
-					got[hostport{host: v.Host, port: v.Port}] = v
-				}
-			})
-
-			want := make(map[hostport]Vertex)
-			for _, v := range tc.want {
-				switch v := v.(type) {
-				case *VirtualHost:
-					want[hostport{host: v.Host, port: v.Port}] = v
-				case *SecureVirtualHost:
-					want[hostport{host: v.Host, port: v.Port}] = v
-				}
-			}
-
-			opts := []cmp.Option{
-				cmp.AllowUnexported(VirtualHost{}, SecureVirtualHost{}, Route{}, Secret{}),
-			}
-			if diff := cmp.Diff(want, got, opts...); diff != "" {
-				t.Fatal(diff)
-			}
-		})
-	}
-}
-
 func backend(name string, port intstr.IntOrString) *v1beta1.IngressBackend {
 	return &v1beta1.IngressBackend{
 		ServiceName: name,
@@ -3269,7 +2607,7 @@ func TestDAGIngressRouteCycle(t *testing.T) {
 			},
 			Routes: []ingressroutev1.Route{{
 				Match: "/finance",
-				Delegate: ingressroutev1.Delegate{
+				Delegate: &ingressroutev1.Delegate{
 					Name:      "finance-root",
 					Namespace: "finance",
 				},
@@ -3290,7 +2628,7 @@ func TestDAGIngressRouteCycle(t *testing.T) {
 				}},
 			}, {
 				Match: "/finance/stocks",
-				Delegate: ingressroutev1.Delegate{
+				Delegate: &ingressroutev1.Delegate{
 					Name:      "example-com",
 					Namespace: "default",
 				},
@@ -3337,7 +2675,7 @@ func TestDAGIngressRouteCycleSelfEdge(t *testing.T) {
 			},
 			Routes: []ingressroutev1.Route{{
 				Match: "/finance",
-				Delegate: ingressroutev1.Delegate{
+				Delegate: &ingressroutev1.Delegate{
 					Name:      "example-com",
 					Namespace: "default",
 				},
@@ -3378,7 +2716,7 @@ func TestDAGIngressRouteDelegatesToNonExistent(t *testing.T) {
 			},
 			Routes: []ingressroutev1.Route{{
 				Match: "/finance",
-				Delegate: ingressroutev1.Delegate{
+				Delegate: &ingressroutev1.Delegate{
 					Name:      "non-existent",
 					Namespace: "non-existent",
 				},
@@ -3419,7 +2757,7 @@ func TestDAGIngressRouteDelegatePrefixDoesntMatch(t *testing.T) {
 			},
 			Routes: []ingressroutev1.Route{{
 				Match: "/finance",
-				Delegate: ingressroutev1.Delegate{
+				Delegate: &ingressroutev1.Delegate{
 					Name:      "finance-root",
 					Namespace: "finance",
 				},
@@ -3584,7 +2922,7 @@ func TestDAGIngressRouteDelegatePrefixMatchesStringPrefixButNotPathPrefix(t *tes
 			},
 			Routes: []ingressroutev1.Route{{
 				Match: "/foo",
-				Delegate: ingressroutev1.Delegate{
+				Delegate: &ingressroutev1.Delegate{
 					Name:      "finance-root",
 					Namespace: "finance",
 				},
@@ -3740,7 +3078,7 @@ func TestDAGIngressRouteStatus(t *testing.T) {
 				}},
 			}, {
 				Match: "/prefix",
-				Delegate: ingressroutev1.Delegate{
+				Delegate: &ingressroutev1.Delegate{
 					Name: "delegated",
 				}},
 			},
@@ -3837,7 +3175,7 @@ func TestDAGIngressRouteStatus(t *testing.T) {
 			},
 			Routes: []ingressroutev1.Route{{
 				Match: "/foo",
-				Delegate: ingressroutev1.Delegate{
+				Delegate: &ingressroutev1.Delegate{
 					Name: "self",
 				},
 			}},
@@ -3856,7 +3194,7 @@ func TestDAGIngressRouteStatus(t *testing.T) {
 			},
 			Routes: []ingressroutev1.Route{{
 				Match: "/foo",
-				Delegate: ingressroutev1.Delegate{
+				Delegate: &ingressroutev1.Delegate{
 					Name: "child",
 				},
 			}},
@@ -3871,7 +3209,7 @@ func TestDAGIngressRouteStatus(t *testing.T) {
 		Spec: ingressroutev1.IngressRouteSpec{
 			Routes: []ingressroutev1.Route{{
 				Match: "/foo",
-				Delegate: ingressroutev1.Delegate{
+				Delegate: &ingressroutev1.Delegate{
 					Name: "parent",
 				},
 			}},
@@ -3890,7 +3228,7 @@ func TestDAGIngressRouteStatus(t *testing.T) {
 			},
 			Routes: []ingressroutev1.Route{{
 				Match: "/foo",
-				Delegate: ingressroutev1.Delegate{
+				Delegate: &ingressroutev1.Delegate{
 					Name: "child",
 				},
 				Services: []ingressroutev1.Service{{
@@ -3913,12 +3251,12 @@ func TestDAGIngressRouteStatus(t *testing.T) {
 			},
 			Routes: []ingressroutev1.Route{{
 				Match: "/foo",
-				Delegate: ingressroutev1.Delegate{
+				Delegate: &ingressroutev1.Delegate{
 					Name: "validChild",
 				},
 			}, {
 				Match: "/bar",
-				Delegate: ingressroutev1.Delegate{
+				Delegate: &ingressroutev1.Delegate{
 					Name: "invalidChild",
 				},
 			}},
@@ -3986,7 +3324,7 @@ func TestDAGIngressRouteStatus(t *testing.T) {
 			VirtualHost: &ingressroutev1.VirtualHost{},
 			Routes: []ingressroutev1.Route{{
 				Match: "/foo",
-				Delegate: ingressroutev1.Delegate{
+				Delegate: &ingressroutev1.Delegate{
 					Name: "validChild",
 				},
 			}},

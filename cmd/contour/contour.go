@@ -22,24 +22,21 @@ import (
 	"strconv"
 	"strings"
 
+	clientset "github.com/heptio/contour/apis/generated/clientset/versioned"
+	"github.com/heptio/contour/internal/contour"
 	"github.com/heptio/contour/internal/debug"
-	clientset "github.com/heptio/contour/internal/generated/clientset/versioned"
+	"github.com/heptio/contour/internal/envoy"
+	"github.com/heptio/contour/internal/grpc"
 	"github.com/heptio/contour/internal/httpsvc"
+	"github.com/heptio/contour/internal/k8s"
+	"github.com/heptio/contour/internal/metrics"
 	"github.com/heptio/workgroup"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/sirupsen/logrus"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
-
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-
-	"github.com/heptio/contour/internal/contour"
-	"github.com/heptio/contour/internal/envoy"
-	"github.com/heptio/contour/internal/grpc"
-	"github.com/heptio/contour/internal/k8s"
-	"github.com/heptio/contour/internal/metrics"
-
-	"github.com/sirupsen/logrus"
 )
 
 var ingressrouteRootNamespaceFlag string
@@ -53,7 +50,7 @@ func main() {
 	path := bootstrap.Arg("path", "Configuration file.").Required().String()
 	bootstrap.Flag("admin-address", "Envoy admin interface address").StringVar(&config.AdminAddress)
 	bootstrap.Flag("admin-port", "Envoy admin interface port").IntVar(&config.AdminPort)
-	bootstrap.Flag("stats-address", "Envoy /stats interface address").IntVar(&config.StatsAddress)
+	bootstrap.Flag("stats-address", "Envoy /stats interface address").StringVar(&config.StatsAddress)
 	bootstrap.Flag("stats-port", "Envoy /stats interface port").IntVar(&config.StatsPort)
 	bootstrap.Flag("xds-address", "xDS gRPC API address").StringVar(&config.XDSAddress)
 	bootstrap.Flag("xds-port", "xDS gRPC API port").IntVar(&config.XDSGRPCPort)

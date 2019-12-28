@@ -524,7 +524,7 @@ func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMat
 
 	for _, route := range ir.Spec.Routes {
 		// route cannot both delegate and point to services
-		if len(route.Services) > 0 && route.Delegate.Name != "" {
+		if len(route.Services) > 0 && route.Delegate != nil {
 			b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("route %q: cannot specify services and delegate in the same route", route.Match), Vhost: host})
 			return
 		}
@@ -539,10 +539,11 @@ func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMat
 			enforceTLSRoute := routeEnforceTLS(enforceTLS, route.PermitInsecure)
 
 			r := &Route{
-				Prefix:       route.Match,
-				object:       ir,
-				Websocket:    route.EnableWebsockets,
-				HTTPSUpgrade: enforceTLSRoute,
+				Prefix:        route.Match,
+				object:        ir,
+				Websocket:     route.EnableWebsockets,
+				HTTPSUpgrade:  enforceTLSRoute,
+				PrefixRewrite: route.PrefixRewrite,
 			}
 			for _, s := range route.Services {
 				if s.Port < 1 || s.Port > 65535 {
@@ -564,7 +565,7 @@ func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMat
 			continue
 		}
 
-		if isBlank(route.Delegate.Name) {
+		if route.Delegate == nil {
 			// not a delegate route
 			continue
 		}
@@ -603,13 +604,7 @@ func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMat
 
 // routeEnforceTLS determines if the route should redirect the user to a secure TLS listener
 func routeEnforceTLS(enforceTLS, permitInsecure bool) bool {
-	if enforceTLS {
-		if permitInsecure {
-			return false
-		}
-		return true
-	}
-	return false
+	return enforceTLS && !permitInsecure
 }
 
 // httppaths returns a slice of HTTPIngressPath values for a given IngressRule.
@@ -646,5 +641,5 @@ type Status struct {
 	Object      *ingressroutev1.IngressRoute
 	Status      string
 	Description string
-	Vhost       string // SAS: Support `aliases` once merged
+	Vhost       string
 }

@@ -122,12 +122,8 @@ func (in *IngressRouteSpec) DeepCopyInto(out *IngressRouteSpec) {
 	*out = *in
 	if in.VirtualHost != nil {
 		in, out := &in.VirtualHost, &out.VirtualHost
-		if *in == nil {
-			*out = nil
-		} else {
-			*out = new(VirtualHost)
-			(*in).DeepCopyInto(*out)
-		}
+		*out = new(VirtualHost)
+		(*in).DeepCopyInto(*out)
 	}
 	if in.Routes != nil {
 		in, out := &in.Routes, &out.Routes
@@ -159,7 +155,11 @@ func (in *Route) DeepCopyInto(out *Route) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
-	out.Delegate = in.Delegate
+	if in.Delegate != nil {
+		in, out := &in.Delegate, &out.Delegate
+		*out = new(Delegate)
+		**out = **in
+	}
 	return
 }
 
@@ -178,12 +178,8 @@ func (in *Service) DeepCopyInto(out *Service) {
 	*out = *in
 	if in.HealthCheck != nil {
 		in, out := &in.HealthCheck, &out.HealthCheck
-		if *in == nil {
-			*out = nil
-		} else {
-			*out = new(HealthCheck)
-			**out = **in
-		}
+		*out = new(HealthCheck)
+		**out = **in
 	}
 	return
 }
@@ -235,12 +231,8 @@ func (in *VirtualHost) DeepCopyInto(out *VirtualHost) {
 	*out = *in
 	if in.TLS != nil {
 		in, out := &in.TLS, &out.TLS
-		if *in == nil {
-			*out = nil
-		} else {
-			*out = new(TLS)
-			**out = **in
-		}
+		*out = new(TLS)
+		**out = **in
 	}
 	return
 }

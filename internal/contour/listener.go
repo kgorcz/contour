@@ -20,13 +20,22 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/auth"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/listener"
 	"github.com/gogo/protobuf/proto"
-	"github.com/gogo/protobuf/types"
 	"github.com/heptio/contour/internal/dag"
+	"github.com/heptio/contour/internal/envoy"
 	"k8s.io/api/core/v1"
+)
+
+const (
+	ENVOY_HTTP_LISTENER            = "ingress_http"
+	ENVOY_HTTPS_LISTENER           = "ingress_https"
+	DEFAULT_HTTP_ACCESS_LOG        = "/dev/stdout"
+	DEFAULT_HTTP_LISTENER_ADDRESS  = "0.0.0.0"
+	DEFAULT_HTTP_LISTENER_PORT     = 8080
+	DEFAULT_HTTPS_ACCESS_LOG       = "/dev/stdout"
+	DEFAULT_HTTPS_LISTENER_ADDRESS = DEFAULT_HTTP_LISTENER_ADDRESS
+	DEFAULT_HTTPS_LISTENER_PORT    = 8443
 )
 
 // ListenerCache manages the contents of the gRPC LDS cache.
@@ -74,9 +83,9 @@ func (lc *ListenerCache) httpAddress() string {
 
 // httpPort returns the port for the HTTP (non TLS)
 // listener or DEFAULT_HTTP_LISTENER_PORT if not configured.
-func (lc *ListenerCache) httpPort() uint32 {
+func (lc *ListenerCache) httpPort() int {
 	if lc.HTTPPort != 0 {
-		return uint32(lc.HTTPPort)
+		return lc.HTTPPort
 	}
 	return DEFAULT_HTTP_LISTENER_PORT
 }
@@ -101,9 +110,9 @@ func (lc *ListenerCache) httpsAddress() string {
 
 // httpsPort returns the port for the HTTPS (TLS) listener
 // or DEFAULT_HTTPS_LISTENER_PORT if not configured.
-func (lc *ListenerCache) httpsPort() uint32 {
+func (lc *ListenerCache) httpsPort() int {
 	if lc.HTTPSPort != 0 {
-		return uint32(lc.HTTPSPort)
+		return lc.HTTPSPort
 	}
 	return DEFAULT_HTTPS_LISTENER_PORT
 }
@@ -176,22 +185,6 @@ func (c *listenerCache) Values(filter func(string) bool) []proto.Message {
 	return values
 }
 
-const (
-	ENVOY_HTTP_LISTENER            = "ingress_http"
-	ENVOY_HTTPS_LISTENER           = "ingress_https"
-	DEFAULT_HTTP_ACCESS_LOG        = "/dev/stdout"
-	DEFAULT_HTTP_LISTENER_ADDRESS  = "0.0.0.0"
-	DEFAULT_HTTP_LISTENER_PORT     = 8080
-	DEFAULT_HTTPS_ACCESS_LOG       = "/dev/stdout"
-	DEFAULT_HTTPS_LISTENER_ADDRESS = DEFAULT_HTTP_LISTENER_ADDRESS
-	DEFAULT_HTTPS_LISTENER_PORT    = 8443
-
-	router     = "envoy.router"
-	grpcWeb    = "envoy.grpc_web"
-	httpFilter = "envoy.http_connection_manager"
-	accessLog  = "envoy.file_access_log"
-)
-
 type listenerVisitor struct {
 	*ListenerCache
 	dag.Visitable
@@ -203,10 +196,13 @@ func (v *listenerVisitor) Visit() map[string]*v2.Listener {
 	tcp := make(map[int]*dag.SecureVirtualHost)
 	ingress_https := v2.Listener{
 		Name:    ENVOY_HTTPS_LISTENER,
-		Address: socketaddress(v.httpsAddress(), v.httpsPort()),
+		Address: envoy.SocketAddress(v.httpsAddress(), v.httpsPort()),
+		ListenerFilters: []listener.ListenerFilter{
+			envoy.TLSInspector(),
+		},
 	}
 	filters := []listener.Filter{
-		httpfilter(ENVOY_HTTPS_LISTENER, v.httpsAccessLog()),
+		envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, v.httpsAccessLog()),
 	}
 	v.Visitable.Visit(func(vh dag.Vertex) {
 		switch vh := vh.(type) {
@@ -225,13 +221,11 @@ func (v *listenerVisitor) Visit() map[string]*v2.Listener {
 				logrus.Info("Creating 443 virtual host", vh.Host)
 				fc := listener.FilterChain{
 					FilterChainMatch: &listener.FilterChainMatch{
-						SniDomains: []string{vh.Host},
+						ServerNames: []string{vh.Host},
 					},
-					TlsContext: tlscontext(data, vh.MinProtoVersion, "h2", "http/1.1"),
+					TlsContext: envoy.DownstreamTLSContext(data[v1.TLSCertKey], data[v1.TLSPrivateKeyKey], vh.MinProtoVersion, "h2", "http/1.1"),
 					Filters:    filters,
-				}
-				if v.UseProxyProto {
-					fc.UseProxyProto = &types.BoolValue{Value: true}
+					UseProxyProto: bv(v.UseProxyProto),
 				}
 				ingress_https.FilterChains = append(ingress_https.FilterChains, fc)
 			} else {
@@ -243,10 +237,13 @@ func (v *listenerVisitor) Visit() map[string]*v2.Listener {
 	if http > 0 {
 		m[ENVOY_HTTP_LISTENER] = &v2.Listener{
 			Name:    ENVOY_HTTP_LISTENER,
-			Address: socketaddress(v.httpAddress(), v.httpPort()),
-			FilterChains: []listener.FilterChain{
-				filterchain(v.UseProxyProto, httpfilter(ENVOY_HTTP_LISTENER, v.httpAccessLog())),
-			},
+			Address: envoy.SocketAddress(v.httpAddress(), v.httpPort()),
+			FilterChains: []listener.FilterChain{{
+				Filters: []listener.Filter{
+					envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, v.httpAccessLog()),
+				},
+				UseProxyProto: bv(v.UseProxyProto),
+			}},
 		}
 	}
 	if len(ingress_https.FilterChains) > 0 {
@@ -304,116 +301,4 @@ func (v *listenerVisitor) Visit() map[string]*v2.Listener {
 		}
 	}
 	return m
-}
-
-func socketaddress(address string, port uint32) core.Address {
-	return core.Address{
-		Address: &core.Address_SocketAddress{
-			SocketAddress: &core.SocketAddress{
-				Protocol: core.TCP,
-				Address:  address,
-				PortSpecifier: &core.SocketAddress_PortValue{
-					PortValue: port,
-				},
-			},
-		},
-	}
-}
-
-func filterchain(useproxy bool, filters ...listener.Filter) listener.FilterChain {
-	fc := listener.FilterChain{
-		Filters: filters,
-	}
-	if useproxy {
-		fc.UseProxyProto = &types.BoolValue{Value: true}
-	}
-	return fc
-}
-
-func httpfilter(routename, accessLogPath string) listener.Filter {
-	return listener.Filter{
-		Name: httpFilter,
-		Config: &types.Struct{
-			Fields: map[string]*types.Value{
-				"stat_prefix": sv(routename),
-				"rds": st(map[string]*types.Value{
-					"route_config_name": sv(routename),
-					"config_source": st(map[string]*types.Value{
-						"api_config_source": st(map[string]*types.Value{
-							"api_type": sv("GRPC"),
-							"cluster_names": lv(
-								sv("contour"),
-							),
-							"grpc_services": lv(
-								st(map[string]*types.Value{
-									"envoy_grpc": st(map[string]*types.Value{
-										"cluster_name": sv("contour"),
-									}),
-								}),
-							),
-						}),
-					}),
-				}),
-				"http_filters": lv(
-					st(map[string]*types.Value{
-						"name": sv(grpcWeb),
-					}),
-					st(map[string]*types.Value{
-						"name": sv(router),
-					}),
-				),
-				"use_remote_address": bv(true), // TODO(jbeda) should this ever be false?
-				"access_log":         accesslog(accessLogPath),
-			},
-		},
-	}
-}
-
-func tlscontext(data map[string][]byte, tlsMinProtoVersion auth.TlsParameters_TlsProtocol, alpnprotos ...string) *auth.DownstreamTlsContext {
-	return &auth.DownstreamTlsContext{
-		CommonTlsContext: &auth.CommonTlsContext{
-			TlsParams: &auth.TlsParameters{
-				TlsMinimumProtocolVersion: tlsMinProtoVersion,
-			},
-			TlsCertificates: []*auth.TlsCertificate{{
-				CertificateChain: &core.DataSource{
-					Specifier: &core.DataSource_InlineBytes{
-						InlineBytes: data[v1.TLSCertKey],
-					},
-				},
-				PrivateKey: &core.DataSource{
-					Specifier: &core.DataSource_InlineBytes{
-						InlineBytes: data[v1.TLSPrivateKeyKey],
-					},
-				},
-			}},
-			AlpnProtocols: alpnprotos,
-		},
-	}
-}
-
-func accesslog(path string) *types.Value {
-	return lv(
-		st(map[string]*types.Value{
-			"name": sv(accessLog),
-			"config": st(map[string]*types.Value{
-				"path": sv(path),
-			}),
-		}),
-	)
-}
-
-func sv(s string) *types.Value {
-	return &types.Value{Kind: &types.Value_StringValue{StringValue: s}}
-}
-
-func bv(b bool) *types.Value {
-	return &types.Value{Kind: &types.Value_BoolValue{BoolValue: b}}
-}
-
-func st(m map[string]*types.Value) *types.Value {
-	return &types.Value{Kind: &types.Value_StructValue{StructValue: &types.Struct{Fields: m}}}
-}
-func lv(v ...*types.Value) *types.Value {
-	return &types.Value{Kind: &types.Value_ListValue{ListValue: &types.ListValue{Values: v}}}
 }

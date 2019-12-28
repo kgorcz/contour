@@ -29,73 +29,12 @@ func TestConfigWriter_WriteYAML(t *testing.T) {
   lds_config:
     api_config_source:
       api_type: GRPC
-      cluster_names: [contour]
       grpc_services:
       - envoy_grpc:
           cluster_name: contour
   cds_config:
     api_config_source:
       api_type: GRPC
-      cluster_names: [contour]
-      grpc_services:
-      - envoy_grpc:
-          cluster_name: contour
-static_resources:
-  clusters:
-  - name: contour
-    connect_timeout: { seconds: 5 }
-    type: STRICT_DNS
-    hosts:
-    - socket_address:
-        address: 127.0.0.1
-        port_value: 8001
-    lb_policy: ROUND_ROBIN
-    http2_protocol_options: {}
-    circuit_breakers:
-      thresholds:
-        - priority: high
-          max_connections: 100000
-          max_pending_requests: 100000
-          max_requests: 60000000
-          max_retries: 50
-        - priority: default
-          max_connections: 100000
-          max_pending_requests: 100000
-          max_requests: 60000000
-          max_retries: 50
-  - name: service_stats
-    connect_timeout: 0.250s
-    type: LOGICAL_DNS
-    lb_policy: ROUND_ROBIN
-    hosts:
-      - socket_address:
-          protocol: TCP
-          address: 127.0.0.1
-          port_value: 9001
-admin:
-  access_log_path: /dev/null
-  address:
-    socket_address:
-      address: 127.0.0.1
-      port_value: 9001
-`,
-		},
-		"statsd endabled": {
-			ConfigWriter: ConfigWriter{
-				StatsdEnabled: true,
-			},
-			want: `dynamic_resources:
-  lds_config:
-    api_config_source:
-      api_type: GRPC
-      cluster_names: [contour]
-      grpc_services:
-      - envoy_grpc:
-          cluster_name: contour
-  cds_config:
-    api_config_source:
-      api_type: GRPC
-      cluster_names: [contour]
       grpc_services:
       - envoy_grpc:
           cluster_name: contour
@@ -154,6 +93,98 @@ static_resources:
                           route:
                             cluster: service_stats
                 http_filters:
+                  - name: envoy.health_check
+                    config:
+                      endpoint: "/healthz"
+                      pass_through_mode: false
+                  - name: envoy.router
+                    config:
+admin:
+  access_log_path: /dev/null
+  address:
+    socket_address:
+      address: 127.0.0.1
+      port_value: 9001
+`,
+		},
+		"stats address and port defined": {
+			ConfigWriter: ConfigWriter{
+				StatsdEnabled: true,
+				StatsAddress:  "1.2.3.4",
+				StatsPort:     1234,
+			},
+			want: `dynamic_resources:
+  lds_config:
+    api_config_source:
+      api_type: GRPC
+      grpc_services:
+      - envoy_grpc:
+          cluster_name: contour
+  cds_config:
+    api_config_source:
+      api_type: GRPC
+      grpc_services:
+      - envoy_grpc:
+          cluster_name: contour
+static_resources:
+  clusters:
+  - name: contour
+    connect_timeout: { seconds: 5 }
+    type: STRICT_DNS
+    hosts:
+    - socket_address:
+        address: 127.0.0.1
+        port_value: 8001
+    lb_policy: ROUND_ROBIN
+    http2_protocol_options: {}
+    circuit_breakers:
+      thresholds:
+        - priority: high
+          max_connections: 100000
+          max_pending_requests: 100000
+          max_requests: 60000000
+          max_retries: 50
+        - priority: default
+          max_connections: 100000
+          max_pending_requests: 100000
+          max_requests: 60000000
+          max_retries: 50
+  - name: service_stats
+    connect_timeout: 0.250s
+    type: LOGICAL_DNS
+    lb_policy: ROUND_ROBIN
+    hosts:
+      - socket_address:
+          protocol: TCP
+          address: 127.0.0.1
+          port_value: 9001
+  listeners:
+    - address:
+        socket_address:
+          protocol: TCP
+          address: 1.2.3.4
+          port_value: 1234
+      filter_chains:
+        - filters:
+            - name: envoy.http_connection_manager
+              config:
+                codec_type: AUTO
+                stat_prefix: stats
+                route_config:
+                  virtual_hosts:
+                    - name: backend
+                      domains:
+                        - "*"
+                      routes:
+                        - match:
+                            prefix: /stats
+                          route:
+                            cluster: service_stats
+                http_filters:
+                  - name: envoy.health_check
+                    config:
+                      endpoint: "/healthz"
+                      pass_through_mode: false
                   - name: envoy.router
                     config:
 stats_sinks:

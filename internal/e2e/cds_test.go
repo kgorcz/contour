@@ -20,10 +20,10 @@ import (
 
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	envoy_cluster "github.com/envoyproxy/go-control-plane/envoy/api/v2/cluster"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type"
 	"github.com/gogo/protobuf/types"
 	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
+	"github.com/heptio/contour/internal/envoy"
 	"google.golang.org/grpc"
 	"k8s.io/api/core/v1"
 	"k8s.io/api/extensions/v1beta1"
@@ -515,17 +515,17 @@ func TestClusterCircuitbreakerAnnotations(t *testing.T) {
 				Name: "default/kuard/8080/da39a3ee5e",
 				Type: v2.Cluster_EDS,
 				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
-					EdsConfig:   apiconfigsource("contour"), // hard coded by initconfig
+					EdsConfig:   envoy.ConfigSource("contour"),
 					ServiceName: "default/kuard",
 				},
 				ConnectTimeout: 250 * time.Millisecond,
 				LbPolicy:       v2.Cluster_ROUND_ROBIN,
 				CircuitBreakers: &envoy_cluster.CircuitBreakers{
 					Thresholds: []*envoy_cluster.CircuitBreakers_Thresholds{{
-						MaxConnections:     uint32t(9000),
-						MaxPendingRequests: uint32t(4096),
-						MaxRequests:        uint32t(404),
-						MaxRetries:         uint32t(7),
+						MaxConnections:     u32(9000),
+						MaxPendingRequests: u32(4096),
+						MaxRequests:        u32(404),
+						MaxRetries:         u32(7),
 					}},
 				},
 				CommonLbConfig: &v2.Cluster_CommonLbConfig{
@@ -564,14 +564,14 @@ func TestClusterCircuitbreakerAnnotations(t *testing.T) {
 				Name: "default/kuard/8080/da39a3ee5e",
 				Type: v2.Cluster_EDS,
 				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
-					EdsConfig:   apiconfigsource("contour"), // hard coded by initconfig
+					EdsConfig:   envoy.ConfigSource("contour"),
 					ServiceName: "default/kuard",
 				},
 				ConnectTimeout: 250 * time.Millisecond,
 				LbPolicy:       v2.Cluster_ROUND_ROBIN,
 				CircuitBreakers: &envoy_cluster.CircuitBreakers{
 					Thresholds: []*envoy_cluster.CircuitBreakers_Thresholds{{
-						MaxPendingRequests: uint32t(9999),
+						MaxPendingRequests: u32(9999),
 					}},
 				},
 				CommonLbConfig: &v2.Cluster_CommonLbConfig{
@@ -693,7 +693,7 @@ func TestClusterLoadBalancerStrategyPerRoute(t *testing.T) {
 				Name: "default/kuard/80/58d888c08a",
 				Type: v2.Cluster_EDS,
 				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
-					EdsConfig:   apiconfigsource("contour"), // hard coded by initconfig
+					EdsConfig:   envoy.ConfigSource("contour"),
 					ServiceName: "default/kuard",
 				},
 				ConnectTimeout: 250 * time.Millisecond,
@@ -708,7 +708,7 @@ func TestClusterLoadBalancerStrategyPerRoute(t *testing.T) {
 				Name: "default/kuard/80/843e4ded8f",
 				Type: v2.Cluster_EDS,
 				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
-					EdsConfig:   apiconfigsource("contour"), // hard coded by initconfig
+					EdsConfig:   envoy.ConfigSource("contour"),
 					ServiceName: "default/kuard",
 				},
 				ConnectTimeout: 250 * time.Millisecond,
@@ -723,10 +723,6 @@ func TestClusterLoadBalancerStrategyPerRoute(t *testing.T) {
 		TypeUrl: clusterType,
 		Nonce:   "0",
 	}, streamCDS(t, cc))
-}
-
-func uint32t(v int) *types.UInt32Value {
-	return &types.UInt32Value{Value: uint32(v)}
 }
 
 func serviceWithAnnotations(ns, name string, annotations map[string]string, ports ...v1.ServicePort) *v1.Service {
@@ -745,13 +741,8 @@ func serviceWithAnnotations(ns, name string, annotations map[string]string, port
 func streamCDS(t *testing.T, cc *grpc.ClientConn, rn ...string) *v2.DiscoveryResponse {
 	t.Helper()
 	rds := v2.NewClusterDiscoveryServiceClient(cc)
-	ctx := context.Background()
-	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-	defer cancel()
-	st, err := rds.StreamClusters(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st, err := rds.StreamClusters(context.TODO())
+	check(t, err)
 	return stream(t, st, &v2.DiscoveryRequest{
 		TypeUrl:       clusterType,
 		ResourceNames: rn,
@@ -763,7 +754,7 @@ func cluster(name, servicename string) *v2.Cluster {
 		Name: name,
 		Type: v2.Cluster_EDS,
 		EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
-			EdsConfig:   apiconfigsource("contour"), // hard coded by initconfig
+			EdsConfig:   envoy.ConfigSource("contour"),
 			ServiceName: servicename,
 		},
 		ConnectTimeout: 250 * time.Millisecond,
@@ -771,17 +762,6 @@ func cluster(name, servicename string) *v2.Cluster {
 		CommonLbConfig: &v2.Cluster_CommonLbConfig{
 			HealthyPanicThreshold: &envoy_type.Percent{ // Disable HealthyPanicThreshold
 				Value: 0,
-			},
-		},
-	}
-}
-
-func apiconfigsource(clusters ...string) *core.ConfigSource {
-	return &core.ConfigSource{
-		ConfigSourceSpecifier: &core.ConfigSource_ApiConfigSource{
-			ApiConfigSource: &core.ApiConfigSource{
-				ApiType:      core.ApiConfigSource_GRPC,
-				ClusterNames: clusters,
 			},
 		},
 	}

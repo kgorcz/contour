@@ -19,6 +19,8 @@ package envoy
 import (
 	"io"
 	"text/template"
+
+	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
 )
 
 // A ConfigWriter knows how to write a bootstap Envoy configuration in YAML format.
@@ -37,7 +39,7 @@ type ConfigWriter struct {
 
 	// StatsAddress is the address that the /stats path will listen on.
 	// Defaults to 0.0.0.0 and is only enabled if StatsdEnabled is true.
-	StatsAddress int
+	StatsAddress string
 
 	// StatsPort is the port that the /stats path will listen on.
 	// Defaults to 8002 and is only enabled if StatsdEnabled is true.
@@ -74,14 +76,12 @@ const yamlConfig = `dynamic_resources:
   lds_config:
     api_config_source:
       api_type: GRPC
-      cluster_names: [contour]
       grpc_services:
       - envoy_grpc:
           cluster_name: contour
   cds_config:
     api_config_source:
       api_type: GRPC
-      cluster_names: [contour]
       grpc_services:
       - envoy_grpc:
           cluster_name: contour
@@ -117,7 +117,7 @@ static_resources:
           protocol: TCP
           address: 127.0.0.1
           port_value: {{ if .AdminPort }}{{ .AdminPort }}{{ else }}9001{{ end }}
-{{ if .StatsdEnabled }}  listeners:
+  listeners:
     - address:
         socket_address:
           protocol: TCP
@@ -140,9 +140,13 @@ static_resources:
                           route:
                             cluster: service_stats
                 http_filters:
+                  - name: envoy.health_check
+                    config:
+                      endpoint: "/healthz"
+                      pass_through_mode: false
                   - name: envoy.router
                     config:
-stats_sinks:
+{{ if .StatsdEnabled }}stats_sinks:
   - name: envoy.statsd
     config:
       address:
@@ -150,8 +154,7 @@ stats_sinks:
           protocol: UDP
           address: {{ if .StatsdAddress }}{{ .StatsdAddress }}{{ else }}127.0.0.1{{ end }}
           port_value: {{ if .StatsdPort }}{{ .StatsdPort }}{{ else }}9125{{ end }}
-{{ end -}}
-admin:
+{{ end -}}admin:
   access_log_path: {{ if .AdminAccessLogPath }}{{ .AdminAccessLogPath }}{{ else }}/dev/null{{ end }}
   address:
     socket_address:
@@ -167,4 +170,22 @@ func (c *ConfigWriter) WriteYAML(w io.Writer) error {
 		return err
 	}
 	return t.Execute(w, c)
+}
+
+// ConfigSource returns a *core.ConfigSource for cluster.
+func ConfigSource(cluster string) *core.ConfigSource {
+	return &core.ConfigSource{
+		ConfigSourceSpecifier: &core.ConfigSource_ApiConfigSource{
+			ApiConfigSource: &core.ApiConfigSource{
+				ApiType: core.ApiConfigSource_GRPC,
+				GrpcServices: []*core.GrpcService{{
+					TargetSpecifier: &core.GrpcService_EnvoyGrpc_{
+						EnvoyGrpc: &core.GrpcService_EnvoyGrpc{
+							ClusterName: cluster,
+						},
+					},
+				}},
+			},
+		},
+	}
 }

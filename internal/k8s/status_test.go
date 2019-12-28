@@ -18,7 +18,7 @@ import (
 	"testing"
 
 	ingressroutev1beta1 "github.com/heptio/contour/apis/contour/v1beta1"
-	"github.com/heptio/contour/internal/generated/clientset/versioned/fake"
+	"github.com/heptio/contour/apis/generated/clientset/versioned/fake"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
@@ -98,13 +98,13 @@ func TestSetStatus(t *testing.T) {
 			irs := IngressRouteStatus{
 				Client: client,
 			}
-			irs.SetStatus(tc.msg, tc.desc, tc.existing)
+			if err := irs.SetStatus(tc.msg, tc.desc, tc.existing); err != nil {
+				t.Fatal(err)
+			}
 
 			if len(client.Actions()) != len(tc.expectedVerbs) {
 				t.Fatalf("Expected verbs mismatch: want: %d, got: %d", len(tc.expectedVerbs), len(client.Actions()))
 			}
-
-			client.ContourV1beta1().IngressRoutes("default").Get("test", metav1.GetOptions{})
 
 			if tc.expectedPatch != string(gotPatchBytes) {
 				t.Fatalf("expected patch: %s, got: %s", tc.expectedPatch, string(gotPatchBytes))

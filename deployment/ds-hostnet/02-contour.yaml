@@ -17,13 +17,13 @@ spec:
         app: contour
       annotations:
         prometheus.io/scrape: "true"
-        prometheus.io/port: "9001"
+        prometheus.io/port: "8002"
         prometheus.io/path: "/stats"
         prometheus.io/format: "prometheus"
     spec:
       hostNetwork: true
       containers:
-      - image: gcr.io/heptio-images/contour:v0.6.1
+      - image: gcr.io/heptio-images/contour:v0.7.0
         imagePullPolicy: Always
         ports:
         - containerPort: 8000
@@ -31,7 +31,7 @@ spec:
         name: contour
         command: ["contour"]
         args: ["serve", "--incluster"]
-      - image: docker.io/envoyproxy/envoy-alpine:v1.6.0
+      - image: docker.io/envoyproxy/envoy-alpine:v1.7.0
         name: envoy
         ports:
         - containerPort: 8080
@@ -45,11 +45,17 @@ spec:
         - --service-node node0
         - --log-level info
         - --v2-config-only
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8002
+          initialDelaySeconds: 3
+          periodSeconds: 3
         volumeMounts:
         - name: contour-config
           mountPath: /config
       initContainers:
-      - image: gcr.io/heptio-images/contour:v0.6.1
+      - image: gcr.io/heptio-images/contour:v0.7.0
         imagePullPolicy: Always
         name: envoy-initconfig
         command: ["contour"]

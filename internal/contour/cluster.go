@@ -14,32 +14,12 @@
 package contour
 
 import (
-	"crypto/sha1"
-	"fmt"
 	"sync"
 
-	"strconv"
-	"strings"
-	"time"
-
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/auth"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/cluster"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
-	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type"
 	"github.com/gogo/protobuf/proto"
-	"github.com/gogo/protobuf/types"
-	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
 	"github.com/heptio/contour/internal/dag"
-)
-
-const (
-	// Default healthcheck / lb algorithm values
-	hcTimeout            = 2 * time.Second
-	hcInterval           = 10 * time.Second
-	hcUnhealthyThreshold = 3
-	hcHealthyThreshold   = 2
-	hcHost               = "contour-envoy-healthcheck"
+	"github.com/heptio/contour/internal/envoy"
 )
 
 // ClusterCache manages the contents of the gRPC CDS cache.
@@ -122,175 +102,13 @@ func (v *clusterVisitor) Visit() map[string]*v2.Cluster {
 
 func (v *clusterVisitor) visit(vertex dag.Vertex) {
 	if service, ok := vertex.(*dag.Service); ok {
-		v.edscluster(service)
+		name := envoy.Clustername(service)
+		if _, ok := v.clusters[name]; !ok {
+			c := envoy.Cluster(service)
+			v.clusters[c.Name] = c
+		}
 	}
+
 	// recurse into children of v
 	vertex.Visit(v.visit)
-}
-
-func (v *clusterVisitor) edscluster(svc *dag.Service) {
-	name := clustername(svc)
-	if _, ok := v.clusters[name]; ok {
-		// already created this cluster via another edge. skip it.
-		return
-	}
-
-	c := &v2.Cluster{
-		Name:             name,
-		Type:             v2.Cluster_EDS,
-		EdsClusterConfig: edsconfig("contour", svc),
-		ConnectTimeout:   250 * time.Millisecond,
-		LbPolicy:         edslbstrategy(svc.LoadBalancerStrategy),
-		CommonLbConfig: &v2.Cluster_CommonLbConfig{
-			HealthyPanicThreshold: &envoy_type.Percent{ // Disable HealthyPanicThreshold
-				Value: 0,
-			},
-		},
-	}
-
-	// Set HealthCheck if requested
-	if svc.HealthCheck != nil {
-		c.HealthChecks = edshealthcheck(svc.HealthCheck)
-	}
-
-	if svc.MaxConnections > 0 || svc.MaxPendingRequests > 0 || svc.MaxRequests > 0 || svc.MaxRetries > 0 {
-		c.CircuitBreakers = &cluster.CircuitBreakers{
-			Thresholds: []*cluster.CircuitBreakers_Thresholds{{
-				MaxConnections:     uint32OrNil(svc.MaxConnections),
-				MaxPendingRequests: uint32OrNil(svc.MaxPendingRequests),
-				MaxRequests:        uint32OrNil(svc.MaxRequests),
-				MaxRetries:         uint32OrNil(svc.MaxRetries),
-			}},
-		}
-	}
-
-	switch svc.Protocol {
-	case "h2":
-		c.Http2ProtocolOptions = &core.Http2ProtocolOptions{}
-		c.TlsContext = &auth.UpstreamTlsContext{
-			CommonTlsContext: &auth.CommonTlsContext{
-				AlpnProtocols: []string{"h2"},
-			},
-		}
-	case "h2c":
-		c.Http2ProtocolOptions = &core.Http2ProtocolOptions{}
-	}
-	v.clusters[c.Name] = c
-}
-
-// clustername returns the name of the CDS cluster for this service.
-func clustername(s *dag.Service) string {
-	buf := s.LoadBalancerStrategy
-	if hc := s.HealthCheck; hc != nil {
-		if hc.TimeoutSeconds > 0 {
-			buf += (time.Duration(hc.TimeoutSeconds) * time.Second).String()
-		}
-		if hc.IntervalSeconds > 0 {
-			buf += (time.Duration(hc.IntervalSeconds) * time.Second).String()
-		}
-		if hc.UnhealthyThresholdCount > 0 {
-			buf += strconv.Itoa(int(hc.UnhealthyThresholdCount))
-		}
-		if hc.HealthyThresholdCount > 0 {
-			buf += strconv.Itoa(int(hc.HealthyThresholdCount))
-		}
-		buf += hc.Path
-	}
-
-	hash := sha1.Sum([]byte(buf))
-	ns := s.Namespace()
-	name := s.Name()
-	return hashname(60, ns, name, strconv.Itoa(int(s.Port)), fmt.Sprintf("%x", hash[:5]))
-}
-
-func edslbstrategy(lbStrategy string) v2.Cluster_LbPolicy {
-	switch lbStrategy {
-	case "WeightedLeastRequest":
-		return v2.Cluster_LEAST_REQUEST
-	case "RingHash":
-		return v2.Cluster_RING_HASH
-	case "Maglev":
-		return v2.Cluster_MAGLEV
-	case "Random":
-		return v2.Cluster_RANDOM
-	default:
-		return v2.Cluster_ROUND_ROBIN
-	}
-}
-
-func edshealthcheck(hc *ingressroutev1.HealthCheck) []*core.HealthCheck {
-	host := hcHost
-	if hc.Host != "" {
-		host = hc.Host
-	}
-
-	// TODO(dfc) why do we need to specify our own default, what is the default
-	// that envoy applies if these fields are left nil?
-	return []*core.HealthCheck{{
-		Timeout:            secondsOrDefault(hc.TimeoutSeconds, hcTimeout),
-		Interval:           secondsOrDefault(hc.IntervalSeconds, hcInterval),
-		UnhealthyThreshold: countOrDefault(hc.UnhealthyThresholdCount, hcUnhealthyThreshold),
-		HealthyThreshold:   countOrDefault(hc.HealthyThresholdCount, hcHealthyThreshold),
-		HealthChecker: &core.HealthCheck_HttpHealthCheck_{
-			HttpHealthCheck: &core.HealthCheck_HttpHealthCheck{
-				Path: hc.Path,
-				Host: host,
-			},
-		},
-	}}
-}
-
-func secondsOrDefault(seconds int64, def time.Duration) *time.Duration {
-	if seconds != 0 {
-		t := time.Duration(seconds) * time.Second
-		return &t
-	}
-	return &def
-}
-
-func countOrDefault(count, def uint32) *types.UInt32Value {
-	if count != 0 {
-		return &types.UInt32Value{
-			Value: count,
-		}
-	}
-	return &types.UInt32Value{
-		Value: def,
-	}
-}
-
-// uint32OrNil returns a *types.UInt32Value containing the v or nil if v is zero.
-func uint32OrNil(i int) *types.UInt32Value {
-	switch i {
-	case 0:
-		return nil
-	default:
-		return &types.UInt32Value{Value: uint32(i)}
-	}
-}
-
-func edsconfig(source string, service *dag.Service) *v2.Cluster_EdsClusterConfig {
-	name := []string{
-		service.Namespace(),
-		service.Name(),
-		service.ServicePort.Name,
-	}
-	if name[2] == "" {
-		name = name[:2]
-	}
-	return &v2.Cluster_EdsClusterConfig{
-		EdsConfig:   apiconfigsource(source), // hard coded by initconfig
-		ServiceName: strings.Join(name, "/"),
-	}
-}
-
-func apiconfigsource(clusters ...string) *core.ConfigSource {
-	return &core.ConfigSource{
-		ConfigSourceSpecifier: &core.ConfigSource_ApiConfigSource{
-			ApiConfigSource: &core.ApiConfigSource{
-				ApiType:      core.ApiConfigSource_GRPC,
-				ClusterNames: clusters,
-			},
-		},
-	}
 }
