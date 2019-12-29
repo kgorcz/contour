@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/api/extensions/v1beta1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/cache"
@@ -382,7 +382,7 @@ func (b *builder) compute() *DAG {
 			}
 		}
 
-		b.processIngressRoute(ir, "", nil, host, enforceTLS)
+		b.processIngressRoute(ir, "", nil, ir.Spec.VirtualHost, enforceTLS)
 	}
 
 	return b.DAG()
@@ -518,19 +518,19 @@ func (b *builder) rootAllowed(ir *ingressroutev1.IngressRoute) bool {
 	return false
 }
 
-func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMatch string, visited []*ingressroutev1.IngressRoute, host string, enforceTLS bool) {
+func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMatch string, visited []*ingressroutev1.IngressRoute, host *ingressroutev1.VirtualHost, enforceTLS bool) {
 	visited = append(visited, ir)
 
 	for _, route := range ir.Spec.Routes {
 		// route cannot both delegate and point to services
 		if len(route.Services) > 0 && route.Delegate != nil {
-			b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("route %q: cannot specify services and delegate in the same route", route.Match), Vhost: host})
+			b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("route %q: cannot specify services and delegate in the same route", route.Match), Vhost: host.Fqdn})
 			return
 		}
 		// base case: The route points to services, so we add them to the vhost
 		if len(route.Services) > 0 {
 			if !matchesPathPrefix(route.Match, prefixMatch) {
-				b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("the path prefix %q does not match the parent's path prefix %q", route.Match, prefixMatch), Vhost: host})
+				b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("the path prefix %q does not match the parent's path prefix %q", route.Match, prefixMatch), Vhost: host.Fqdn})
 				return
 			}
 
@@ -546,11 +546,11 @@ func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMat
 			}
 			for _, s := range route.Services {
 				if s.Port < 1 || s.Port > 65535 {
-					b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("route %q: service %q: port must be in the range 1-65535", route.Match, s.Name), Vhost: host})
+					b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("route %q: service %q: port must be in the range 1-65535", route.Match, s.Name), Vhost: host.Fqdn})
 					return
 				}
 				if s.Weight < 0 {
-					b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("route %q: service %q: weight must be greater than or equal to zero", route.Match, s.Name), Vhost: host})
+					b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("route %q: service %q: weight must be greater than or equal to zero", route.Match, s.Name), Vhost: host.Fqdn})
 					return
 				}
 				m := meta{name: s.Name, namespace: ir.Namespace}
@@ -559,8 +559,8 @@ func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMat
 				}
 			}
 
-			b.lookupVirtualHost(host, 80).addRoute(r)
-			b.lookupSecureVirtualHost(host, 443).addRoute(r)
+			b.lookupVirtualHost(host.Fqdn, host.Port).addRoute(r)
+			b.lookupSecureVirtualHost(host.Fqdn, host.Port).addRoute(r)
 			continue
 		}
 
@@ -589,7 +589,7 @@ func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMat
 				if dest.Name == vir.Name && dest.Namespace == vir.Namespace {
 					path = append(path, fmt.Sprintf("%s/%s", dest.Namespace, dest.Name))
 					description := fmt.Sprintf("route creates a delegation cycle: %s", strings.Join(path, " -> "))
-					b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: description, Vhost: host})
+					b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: description, Vhost: host.Fqdn})
 					return
 				}
 			}
@@ -598,7 +598,7 @@ func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMat
 			b.processIngressRoute(dest, route.Match, visited, host, enforceTLS)
 		}
 	}
-	b.setStatus(Status{Object: ir, Status: StatusValid, Description: "valid IngressRoute", Vhost: host})
+	b.setStatus(Status{Object: ir, Status: StatusValid, Description: "valid IngressRoute", Vhost: host.Fqdn})
 }
 
 // routeEnforceTLS determines if the route should redirect the user to a secure TLS listener
