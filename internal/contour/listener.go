@@ -19,12 +19,12 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2"
+	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/listener"
 	"github.com/gogo/protobuf/proto"
 	"github.com/heptio/contour/internal/dag"
 	"github.com/heptio/contour/internal/envoy"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 )
 
 const (
@@ -223,8 +223,8 @@ func (v *listenerVisitor) Visit() map[string]*v2.Listener {
 					FilterChainMatch: &listener.FilterChainMatch{
 						ServerNames: []string{vh.Host},
 					},
-					TlsContext: envoy.DownstreamTLSContext(data[v1.TLSCertKey], data[v1.TLSPrivateKeyKey], vh.MinProtoVersion, "h2", "http/1.1"),
-					Filters:    filters,
+					TlsContext:    envoy.DownstreamTLSContext(data[v1.TLSCertKey], data[v1.TLSPrivateKeyKey], vh.MinProtoVersion, "h2", "http/1.1"),
+					Filters:       filters,
 					UseProxyProto: bv(v.UseProxyProto),
 				}
 				ingress_https.FilterChains = append(ingress_https.FilterChains, fc)
@@ -256,7 +256,7 @@ func (v *listenerVisitor) Visit() map[string]*v2.Listener {
 	if len(tcp) > 0 {
 		logrus.Info("Found ", len(tcp), " tcp virtual hosts")
 		for _, svh := range tcp {
-			logrus.Info("Configuring tcp virtual host ", svh.FQDN())
+			logrus.Info("Configuring tcp virtual host ", svh.Host)
 			var svcs []*dag.Service
 			svh.Visit(func(r dag.Vertex) {
 				switch r := r.(type) {
@@ -272,28 +272,20 @@ func (v *listenerVisitor) Visit() map[string]*v2.Listener {
 			})
 			if len(svcs) != 1 {
 				// no services for this route, skip it.
-				logrus.Error("TCP virtual host ", svh.FQDN(), " did not have any services")
+				logrus.Error("TCP virtual host ", svh.Host, " did not have any services")
 				continue
 			}
 			svc := svcs[0]
 			name := "ingress_tcp_port_" + strconv.Itoa(svh.Port)
+			data := svh.Data()
 			m[name] = &v2.Listener{
 				Name:    name,
-				Address: socketaddress("0.0.0.0", uint32(svh.Port)),
+				Address: envoy.SocketAddress("0.0.0.0", svh.Port),
 				FilterChains: []listener.FilterChain{
 					listener.FilterChain{
-						TlsContext: tlscontext(svh.Data(), svh.MinProtoVersion),
+						TlsContext: envoy.DownstreamTLSContext(data[v1.TLSCertKey], data[v1.TLSPrivateKeyKey], svh.MinProtoVersion),
 						Filters: []listener.Filter{
-							listener.Filter{
-								Name: "envoy.tcp_proxy",
-								Config: &types.Struct{
-									Fields: map[string]*types.Value{
-										"stat_prefix": sv(name),
-										"cluster":     sv(hashname(60, svc.Namespace(), svc.Name(), strconv.Itoa(int(svc.Port)))),
-										"access_log":  accesslog(v.httpsAccessLog()),
-									},
-								},
-							},
+							envoy.TCPProxyFilter(name, svc, v.httpsAccessLog()),
 						},
 					},
 				},

@@ -19,7 +19,7 @@ import (
 
 	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
 	clientset "github.com/heptio/contour/apis/generated/clientset/versioned"
-	"github.com/heptio/workgroup"
+	"github.com/kkkmmu/workgroup"
 	"github.com/sirupsen/logrus"
 
 	"k8s.io/api/core/v1"

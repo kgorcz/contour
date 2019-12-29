@@ -443,7 +443,6 @@ func (b *builder) validIngressRoutes() []*ingressroutev1.IngressRoute {
 		if ir.Spec.VirtualHost == nil {
 			valid = append(valid, ir)
 			continue
-			vhost:         svhost,
 		}
 		fqdnIngressroutes[ir.Spec.VirtualHost.Fqdn] = append(fqdnIngressroutes[ir.Spec.VirtualHost.Fqdn], ir)
 	}
@@ -560,8 +559,8 @@ func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMat
 				}
 			}
 
-			b.lookupVirtualHost(host, irp.port).addRoute(r)
-			b.lookupSecureVirtualHost(host, irp.port).addRoute(r)
+			b.lookupVirtualHost(host, 80).addRoute(r)
+			b.lookupSecureVirtualHost(host, 443).addRoute(r)
 			continue
 		}
 

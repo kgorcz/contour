@@ -194,14 +194,6 @@
   version = "v0.5.0"
 
 [[projects]]
-  digest = "1:f2aa69f65a54d69bea90194702bb2f044b1d2b55f7820180b3f37f033f0bd228"
-  name = "github.com/heptio/workgroup"
-  packages = ["."]
-  pruneopts = ""
-  revision = "905fccf41a08323fdad6a1bd277290fdc54d92c3"
-  version = "v0.8.0-beta.1"
-
-[[projects]]
   digest = "1:7ab38c15bd21e056e3115c8b526d201eaf74e0308da9370997c6b3c187115d36"
   name = "github.com/imdario/mergo"
   packages = ["."]
@@ -216,6 +208,14 @@
   pruneopts = ""
   revision = "1624edc4454b8682399def8740d46db5e4362ba4"
   version = "v1.1.5"
+
+[[projects]]
+  digest = "1:f2aa69f65a54d69bea90194702bb2f044b1d2b55f7820180b3f37f033f0bd228"
+  name = "github.com/kkkmmu/workgroup"
+  packages = ["."]
+  pruneopts = ""
+  revision = "905fccf41a08323fdad6a1bd277290fdc54d92c3"
+  version = "v0.8.0-beta.1"
 
 [[projects]]
   digest = "1:fb476825e52f5685089899fe09a8d07a91579938e1db40a93527674716f1e59d"
@@ -737,7 +737,7 @@
     "github.com/gogo/protobuf/proto",
     "github.com/gogo/protobuf/types",
     "github.com/google/go-cmp/cmp",
-    "github.com/heptio/workgroup",
+    "github.com/kkkmmu/workgroup",
     "github.com/prometheus/client_golang/prometheus",
     "github.com/prometheus/client_golang/prometheus/promhttp",
     "github.com/prometheus/client_model/go",
