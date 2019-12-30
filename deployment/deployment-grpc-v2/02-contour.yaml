@@ -21,8 +21,8 @@ spec:
         prometheus.io/format: "prometheus"
     spec:
       containers:
-      - image: mycontour:5
-        imagePullPolicy: IfNotPresent
+      - image: gcr.io/heptio-images/contour:v0.8.0
+        imagePullPolicy: Always
         name: contour
         command: ["contour"]
         args: ["serve", "--incluster"]
@@ -51,9 +51,13 @@ spec:
         volumeMounts:
         - name: contour-config
           mountPath: /config
+        lifecycle:
+          preStop:
+            exec:
+              command: ["wget", "-qO-", "http://localhost:9001/healthcheck/fail"] 
       initContainers:
-      - image: mycontour:5
-        imagePullPolicy: IfNotPresent
+      - image: gcr.io/heptio-images/contour:v0.8.0
+        imagePullPolicy: Always
         name: envoy-initconfig
         command: ["contour"]
         args:

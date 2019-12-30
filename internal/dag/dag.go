@@ -49,9 +49,9 @@ func (d *DAG) Statuses() []Status {
 }
 
 type Route struct {
-	Prefix   string
-	object   interface{} // one of Ingress or IngressRoute
-	services map[servicemeta]*Service
+	Prefix       string
+	object       interface{} // one of Ingress or IngressRoute
+	httpServices map[servicemeta]*HTTPService
 
 	// Should this route generate a 301 upgrade if accessed
 	// over HTTP?
@@ -83,15 +83,15 @@ type Route struct {
 	PrefixRewrite string
 }
 
-func (r *Route) addService(s *Service) {
-	if r.services == nil {
-		r.services = make(map[servicemeta]*Service)
+func (r *Route) addHTTPService(s *HTTPService) {
+	if r.httpServices == nil {
+		r.httpServices = make(map[servicemeta]*HTTPService)
 	}
-	r.services[s.toMeta()] = s
+	r.httpServices[s.toMeta()] = s
 }
 
 func (r *Route) Visit(f func(Vertex)) {
-	for _, c := range r.services {
+	for _, c := range r.httpServices {
 		f(c)
 	}
 }
@@ -103,8 +103,12 @@ type VirtualHost struct {
 	// if the VirtualHost is generated inside Contour.
 	Port int
 
+	// Host name
 	Host   string
 	routes map[string]*Route
+
+	// Service to TCP proxy all incoming connections.
+	*TCPProxy
 }
 
 func (v *VirtualHost) addRoute(route *Route) {
@@ -118,6 +122,9 @@ func (v *VirtualHost) Visit(f func(Vertex)) {
 	for _, r := range v.routes {
 		f(r)
 	}
+	if v.TCPProxy != nil {
+		f(v.TCPProxy)
+	}
 }
 
 // A SecureVirtualHost represents a HTTP host protected by TLS.
@@ -127,19 +134,13 @@ type SecureVirtualHost struct {
 	// TLS minimum protocol version. Defaults to auth.TlsParameters_TLS_AUTO
 	MinProtoVersion auth.TlsParameters_TlsProtocol
 
-	secret *Secret
-}
-
-func (s *SecureVirtualHost) Data() map[string][]byte {
-	if s.secret == nil {
-		return nil
-	}
-	return s.secret.Data()
+	// The cert and key for this host.
+	*Secret
 }
 
 func (s *SecureVirtualHost) Visit(f func(Vertex)) {
 	s.VirtualHost.Visit(f)
-	f(s.secret)
+	f(s.Secret)
 }
 
 type Visitable interface {
@@ -150,18 +151,33 @@ type Vertex interface {
 	Visitable
 }
 
-// Service represents a K8s Service as a DAG vertex. A Service is
-// a leaf in the DAG.
-type Service struct {
-	Object *v1.Service
+type Service interface {
+	Vertex
+	toMeta() servicemeta
+}
+
+// TCPProxy represents a cluster of TCP endpoints.
+type TCPProxy struct {
+
+	// Services to proxy decrypted traffic to.
+	Services []*TCPService
+}
+
+func (t *TCPProxy) Visit(f func(Vertex)) {
+	for _, s := range t.Services {
+		f(s)
+	}
+}
+
+// TCPService represents a Kuberentes Service that speaks TCP. That's all we know.
+type TCPService struct {
+	Name, Namespace string
 
 	*v1.ServicePort
 	Weight int
 
-	// Protocol is the layer 7 protocol of this service
-	Protocol string
-
-	HealthCheck          *ingressroutev1.HealthCheck
+	// The load balancer type to use when picking a host in the cluster.
+	// See https://www.envoyproxy.io/docs/envoy/latest/api-v2/api/v2/cds.proto#envoy-api-enum-cluster-lbpolicy
 	LoadBalancerStrategy string
 
 	// Circuit breaking limits
@@ -181,11 +197,9 @@ type Service struct {
 	// MaxRetries is the maximum number of parallel retries that
 	// Envoy will allow to the upstream cluster.
 	MaxRetries int
-}
 
-func (s *Service) Name() string       { return s.Object.Name }
-func (s *Service) Namespace() string  { return s.Object.Namespace }
-func (s *Service) Visit(func(Vertex)) {}
+	HealthCheck *ingressroutev1.HealthCheck
+}
 
 type servicemeta struct {
 	name        string
@@ -196,10 +210,10 @@ type servicemeta struct {
 	healthcheck string // %#v of *ingressroutev1.HealthCheck
 }
 
-func (s *Service) toMeta() servicemeta {
+func (s *TCPService) toMeta() servicemeta {
 	return servicemeta{
-		name:        s.Object.Name,
-		namespace:   s.Object.Namespace,
+		name:        s.Name,
+		namespace:   s.Namespace,
 		port:        s.Port,
 		weight:      s.Weight,
 		strategy:    s.LoadBalancerStrategy,
@@ -207,24 +221,38 @@ func (s *Service) toMeta() servicemeta {
 	}
 }
 
+func (s *TCPService) Visit(func(Vertex)) {
+	// TCPServices are leaves in the DAG.
+}
+
+// HTTPService represents a Kuberneres Service object which speaks
+// HTTP/1.1 or HTTP/2.0.
+type HTTPService struct {
+	TCPService
+
+	// Protocol is the layer 7 protocol of this service
+	// One of "", "h2", or "h2c".
+	Protocol string
+}
+
 // Secret represents a K8s Secret for TLS usage as a DAG Vertex. A Secret is
 // a leaf in the DAG.
 type Secret struct {
-	object *v1.Secret
+	Object *v1.Secret
 }
 
-func (s *Secret) Name() string       { return s.object.Name }
-func (s *Secret) Namespace() string  { return s.object.Namespace }
+func (s *Secret) Name() string       { return s.Object.Name }
+func (s *Secret) Namespace() string  { return s.Object.Namespace }
 func (s *Secret) Visit(func(Vertex)) {}
 
 // Data returns the contents of the backing secret's map.
 func (s *Secret) Data() map[string][]byte {
-	return s.object.Data
+	return s.Object.Data
 }
 
 func (s *Secret) toMeta() meta {
 	return meta{
-		name:      s.object.Name,
-		namespace: s.object.Namespace,
+		name:      s.Name(),
+		namespace: s.Namespace(),
 	}
 }

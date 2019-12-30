@@ -18,8 +18,9 @@ import (
 	"time"
 
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/cluster"
+	envoy_cluster "github.com/envoyproxy/go-control-plane/envoy/api/v2/cluster"
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
+	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type"
 	"github.com/gogo/protobuf/types"
 	"github.com/google/go-cmp/cmp"
 	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
@@ -46,13 +47,12 @@ func TestCluster(t *testing.T) {
 	}
 
 	tests := map[string]struct {
-		service *dag.Service
+		service dag.Service
 		want    *v2.Cluster
 	}{
 		"simple service": {
-			service: &dag.Service{
-				Object:      s1,
-				ServicePort: &s1.Spec.Ports[0],
+			service: &dag.HTTPService{
+				TCPService: service(s1),
 			},
 			want: &v2.Cluster{
 				Name: "default/kuard/443/da39a3ee5e",
@@ -63,14 +63,13 @@ func TestCluster(t *testing.T) {
 				},
 				ConnectTimeout: 250 * time.Millisecond,
 				LbPolicy:       v2.Cluster_ROUND_ROBIN,
-				CommonLbConfig: clusterCommonLBConfig(),
+				CommonLbConfig: ClusterCommonLBConfig(),
 			},
 		},
 		"h2c upstream": {
-			service: &dag.Service{
-				Object:      s1,
-				ServicePort: &s1.Spec.Ports[0],
-				Protocol:    "h2c",
+			service: &dag.HTTPService{
+				TCPService: service(s1),
+				Protocol:   "h2c",
 			},
 			want: &v2.Cluster{
 				Name: "default/kuard/443/da39a3ee5e",
@@ -82,14 +81,13 @@ func TestCluster(t *testing.T) {
 				ConnectTimeout:       250 * time.Millisecond,
 				LbPolicy:             v2.Cluster_ROUND_ROBIN,
 				Http2ProtocolOptions: &core.Http2ProtocolOptions{},
-				CommonLbConfig:       clusterCommonLBConfig(),
+				CommonLbConfig:       ClusterCommonLBConfig(),
 			},
 		},
 		"h2 upstream": {
-			service: &dag.Service{
-				Object:      s1,
-				ServicePort: &s1.Spec.Ports[0],
-				Protocol:    "h2",
+			service: &dag.HTTPService{
+				TCPService: service(s1),
+				Protocol:   "h2",
 			},
 			want: &v2.Cluster{
 				Name: "default/kuard/443/da39a3ee5e",
@@ -102,14 +100,16 @@ func TestCluster(t *testing.T) {
 				LbPolicy:             v2.Cluster_ROUND_ROBIN,
 				Http2ProtocolOptions: &core.Http2ProtocolOptions{},
 				TlsContext:           UpstreamTLSContext(),
-				CommonLbConfig:       clusterCommonLBConfig(),
+				CommonLbConfig:       ClusterCommonLBConfig(),
 			},
 		},
 		"contour.heptio.com/max-connections": {
-			service: &dag.Service{
-				Object:         s1,
-				ServicePort:    &s1.Spec.Ports[0],
-				MaxConnections: 9000,
+			service: &dag.HTTPService{
+				TCPService: dag.TCPService{
+					Name: s1.Name, Namespace: s1.Namespace,
+					ServicePort:    &s1.Spec.Ports[0],
+					MaxConnections: 9000,
+				},
 			},
 			want: &v2.Cluster{
 				Name: "default/kuard/443/da39a3ee5e",
@@ -120,19 +120,21 @@ func TestCluster(t *testing.T) {
 				},
 				ConnectTimeout: 250 * time.Millisecond,
 				LbPolicy:       v2.Cluster_ROUND_ROBIN,
-				CircuitBreakers: &cluster.CircuitBreakers{
-					Thresholds: []*cluster.CircuitBreakers_Thresholds{{
+				CircuitBreakers: &envoy_cluster.CircuitBreakers{
+					Thresholds: []*envoy_cluster.CircuitBreakers_Thresholds{{
 						MaxConnections: u32(9000),
 					}},
 				},
-				CommonLbConfig: clusterCommonLBConfig(),
+				CommonLbConfig: ClusterCommonLBConfig(),
 			},
 		},
 		"contour.heptio.com/max-pending-requests": {
-			service: &dag.Service{
-				Object:             s1,
-				ServicePort:        &s1.Spec.Ports[0],
-				MaxPendingRequests: 4096,
+			service: &dag.HTTPService{
+				TCPService: dag.TCPService{
+					Name: s1.Name, Namespace: s1.Namespace,
+					ServicePort:        &s1.Spec.Ports[0],
+					MaxPendingRequests: 4096,
+				},
 			},
 			want: &v2.Cluster{
 				Name: "default/kuard/443/da39a3ee5e",
@@ -143,19 +145,21 @@ func TestCluster(t *testing.T) {
 				},
 				ConnectTimeout: 250 * time.Millisecond,
 				LbPolicy:       v2.Cluster_ROUND_ROBIN,
-				CircuitBreakers: &cluster.CircuitBreakers{
-					Thresholds: []*cluster.CircuitBreakers_Thresholds{{
+				CircuitBreakers: &envoy_cluster.CircuitBreakers{
+					Thresholds: []*envoy_cluster.CircuitBreakers_Thresholds{{
 						MaxPendingRequests: u32(4096),
 					}},
 				},
-				CommonLbConfig: clusterCommonLBConfig(),
+				CommonLbConfig: ClusterCommonLBConfig(),
 			},
 		},
 		"contour.heptio.com/max-requests": {
-			service: &dag.Service{
-				Object:      s1,
-				ServicePort: &s1.Spec.Ports[0],
-				MaxRequests: 404,
+			service: &dag.HTTPService{
+				TCPService: dag.TCPService{
+					Name: s1.Name, Namespace: s1.Namespace,
+					ServicePort: &s1.Spec.Ports[0],
+					MaxRequests: 404,
+				},
 			},
 			want: &v2.Cluster{
 				Name: "default/kuard/443/da39a3ee5e",
@@ -166,19 +170,21 @@ func TestCluster(t *testing.T) {
 				},
 				ConnectTimeout: 250 * time.Millisecond,
 				LbPolicy:       v2.Cluster_ROUND_ROBIN,
-				CircuitBreakers: &cluster.CircuitBreakers{
-					Thresholds: []*cluster.CircuitBreakers_Thresholds{{
+				CircuitBreakers: &envoy_cluster.CircuitBreakers{
+					Thresholds: []*envoy_cluster.CircuitBreakers_Thresholds{{
 						MaxRequests: u32(404),
 					}},
 				},
-				CommonLbConfig: clusterCommonLBConfig(),
+				CommonLbConfig: ClusterCommonLBConfig(),
 			},
 		},
 		"contour.heptio.com/max-retries": {
-			service: &dag.Service{
-				Object:      s1,
-				ServicePort: &s1.Spec.Ports[0],
-				MaxRetries:  7,
+			service: &dag.HTTPService{
+				TCPService: dag.TCPService{
+					Name: s1.Name, Namespace: s1.Namespace,
+					ServicePort: &s1.Spec.Ports[0],
+					MaxRetries:  7,
+				},
 			},
 			want: &v2.Cluster{
 				Name: "default/kuard/443/da39a3ee5e",
@@ -189,12 +195,29 @@ func TestCluster(t *testing.T) {
 				},
 				ConnectTimeout: 250 * time.Millisecond,
 				LbPolicy:       v2.Cluster_ROUND_ROBIN,
-				CircuitBreakers: &cluster.CircuitBreakers{
-					Thresholds: []*cluster.CircuitBreakers_Thresholds{{
+				CircuitBreakers: &envoy_cluster.CircuitBreakers{
+					Thresholds: []*envoy_cluster.CircuitBreakers_Thresholds{{
 						MaxRetries: u32(7),
 					}},
 				},
-				CommonLbConfig: clusterCommonLBConfig(),
+				CommonLbConfig: ClusterCommonLBConfig(),
+			},
+		},
+		"tcp service": {
+			service: &dag.TCPService{
+				Name: s1.Name, Namespace: s1.Namespace,
+				ServicePort: &s1.Spec.Ports[0],
+			},
+			want: &v2.Cluster{
+				Name: "default/kuard/443/da39a3ee5e",
+				Type: v2.Cluster_EDS,
+				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
+					EdsConfig:   ConfigSource("contour"),
+					ServiceName: "default/kuard/http",
+				},
+				ConnectTimeout: 250 * time.Millisecond,
+				LbPolicy:       v2.Cluster_ROUND_ROBIN,
+				CommonLbConfig: ClusterCommonLBConfig(),
 			},
 		},
 	}
@@ -211,12 +234,13 @@ func TestCluster(t *testing.T) {
 
 func TestClustername(t *testing.T) {
 	tests := map[string]struct {
-		service *dag.Service
+		service *dag.TCPService
 		want    string
 	}{
 		"simple": {
-			service: &dag.Service{
-				Object: service("default", "backend"),
+			service: &dag.TCPService{
+				Name:      "backend",
+				Namespace: "default",
 				ServicePort: &v1.ServicePort{
 					Name:       "http",
 					Protocol:   "TCP",
@@ -227,8 +251,9 @@ func TestClustername(t *testing.T) {
 			want: "default/backend/80/da39a3ee5e",
 		},
 		"far too long": {
-			service: &dag.Service{
-				Object: service("it-is-a-truth-universally-acknowledged-that-a-single-man-in-possession-of-a-good-fortune", "must-be-in-want-of-a-wife"),
+			service: &dag.TCPService{
+				Name:      "must-be-in-want-of-a-wife",
+				Namespace: "it-is-a-truth-universally-acknowledged-that-a-single-man-in-possession-of-a-good-fortune",
 				ServicePort: &v1.ServicePort{
 					Name:       "http",
 					Protocol:   "TCP",
@@ -239,8 +264,9 @@ func TestClustername(t *testing.T) {
 			want: "it-is-a--dea8b0/must-be--dea8b0/9999/da39a3ee5e",
 		},
 		"various healthcheck params": {
-			service: &dag.Service{
-				Object: service("default", "backend"),
+			service: &dag.TCPService{
+				Name:      "backend",
+				Namespace: "default",
 				ServicePort: &v1.ServicePort{
 					Name:       "http",
 					Protocol:   "TCP",
@@ -374,19 +400,22 @@ func TestU32nil(t *testing.T) {
 	assert(u32(1), u32nil(1))
 }
 
-func service(ns, name string, ports ...v1.ServicePort) *v1.Service {
-	return serviceWithAnnotations(ns, name, nil, ports...)
+func TestClusterCommonLBConfig(t *testing.T) {
+	got := ClusterCommonLBConfig()
+	want := &v2.Cluster_CommonLbConfig{
+		HealthyPanicThreshold: &envoy_type.Percent{ // Disable HealthyPanicThreshold
+			Value: 0,
+		},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatal(diff)
+	}
 }
 
-func serviceWithAnnotations(ns, name string, annotations map[string]string, ports ...v1.ServicePort) *v1.Service {
-	return &v1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        name,
-			Namespace:   ns,
-			Annotations: annotations,
-		},
-		Spec: v1.ServiceSpec{
-			Ports: ports,
-		},
+func service(s *v1.Service) dag.TCPService {
+	return dag.TCPService{
+		Name:        s.Name,
+		Namespace:   s.Namespace,
+		ServicePort: &s.Spec.Ports[0],
 	}
 }

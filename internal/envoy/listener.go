@@ -14,9 +14,12 @@
 package envoy
 
 import (
+	"sort"
+
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/auth"
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/listener"
+	"github.com/envoyproxy/go-control-plane/pkg/util"
 	"github.com/gogo/protobuf/types"
 	"github.com/heptio/contour/internal/dag"
 )
@@ -24,7 +27,7 @@ import (
 // TLSInspector returns a new TLS inspector listener filter.
 func TLSInspector() listener.ListenerFilter {
 	return listener.ListenerFilter{
-		Name:   "envoy.listener.tls_inspector",
+		Name:   util.TlsInspector,
 		Config: new(types.Struct),
 	}
 }
@@ -33,7 +36,7 @@ func TLSInspector() listener.ListenerFilter {
 // for the supplied route and access log.
 func HTTPConnectionManager(routename, accessLogPath string) listener.Filter {
 	return listener.Filter{
-		Name: "envoy.http_connection_manager",
+		Name: util.HTTPConnectionManager,
 		Config: &types.Struct{
 			Fields: map[string]*types.Value{
 				"stat_prefix": sv(routename),
@@ -54,13 +57,13 @@ func HTTPConnectionManager(routename, accessLogPath string) listener.Filter {
 				}),
 				"http_filters": lv(
 					st(map[string]*types.Value{
-						"name": sv("envoy.gzip"),
+						"name": sv(util.Gzip),
 					}),
 					st(map[string]*types.Value{
-						"name": sv("envoy.grpc_web"),
+						"name": sv(util.GRPCWeb),
 					}),
 					st(map[string]*types.Value{
-						"name": sv("envoy.router"),
+						"name": sv(util.Router),
 					}),
 				),
 				"http_protocol_options": st(map[string]*types.Value{
@@ -71,6 +74,63 @@ func HTTPConnectionManager(routename, accessLogPath string) listener.Filter {
 			},
 		},
 	}
+}
+
+// TCPProxy creates a new TCPProxy filter.
+func TCPProxy(statPrefix string, proxy *dag.TCPProxy, accessLogPath string) listener.Filter {
+	switch len(proxy.Services) {
+	case 1:
+		return listener.Filter{
+			Name: util.TCPProxy,
+			Config: &types.Struct{
+				Fields: map[string]*types.Value{
+					"stat_prefix": sv(statPrefix),
+					"cluster":     sv(Clustername(proxy.Services[0])),
+					"access_log":  accesslog(accessLogPath),
+				},
+			},
+		}
+	default:
+		// its easier to sort the input of the cluster list rather than the
+		// grpc type output. We have to make a copy to avoid mutating the dag.
+		services := make([]*dag.TCPService, len(proxy.Services))
+		copy(services, proxy.Services)
+		sort.Stable(tcpServiceByName(services))
+		var l []*types.Value
+		for _, service := range services {
+			weight := service.Weight
+			if weight == 0 {
+				weight = 1
+			}
+			l = append(l, st(map[string]*types.Value{
+				"name":   sv(Clustername(service)),
+				"weight": nv(float64(weight)),
+			}))
+		}
+		return listener.Filter{
+			Name: util.TCPProxy,
+			Config: &types.Struct{
+				Fields: map[string]*types.Value{
+					"stat_prefix": sv(statPrefix),
+					"weighted_clusters": st(map[string]*types.Value{
+						"clusters": lv(l...),
+					}),
+					"access_log": accesslog(accessLogPath),
+				},
+			},
+		}
+	}
+}
+
+type tcpServiceByName []*dag.TCPService
+
+func (t tcpServiceByName) Len() int      { return len(t) }
+func (t tcpServiceByName) Swap(i, j int) { t[i], t[j] = t[j], t[i] }
+func (t tcpServiceByName) Less(i, j int) bool {
+	if t[i].Name == t[j].Name {
+		return t[i].Weight < t[j].Weight
+	}
+	return t[i].Name < t[j].Name
 }
 
 // TCPProxyFilter creates a new listener filter using envoy.tcp_proxy
@@ -130,7 +190,7 @@ func DownstreamTLSContext(cert, key []byte, tlsMinProtoVersion auth.TlsParameter
 func accesslog(path string) *types.Value {
 	return lv(
 		st(map[string]*types.Value{
-			"name": sv("envoy.file_access_log"),
+			"name": sv(util.FileAccessLog),
 			"config": st(map[string]*types.Value{
 				"path": sv(path),
 			}),
@@ -148,4 +208,8 @@ func st(m map[string]*types.Value) *types.Value {
 
 func lv(v ...*types.Value) *types.Value {
 	return &types.Value{Kind: &types.Value_ListValue{ListValue: &types.ListValue{Values: v}}}
+}
+
+func nv(n float64) *types.Value {
+	return &types.Value{Kind: &types.Value_NumberValue{NumberValue: n}}
 }

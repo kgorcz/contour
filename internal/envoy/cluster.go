@@ -26,23 +26,45 @@ import (
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type"
 	"github.com/gogo/protobuf/types"
-	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
 	"github.com/heptio/contour/internal/dag"
 )
 
 // Cluster creates new v2.Cluster from service.
-func Cluster(service *dag.Service) *v2.Cluster {
-	cluster := &v2.Cluster{
+func Cluster(s dag.Service) *v2.Cluster {
+	switch s := s.(type) {
+	case *dag.HTTPService:
+		return httpCluster(s)
+	case *dag.TCPService:
+		return cluster(s)
+	default:
+		panic(fmt.Sprintf("unsupported Service: %T", s))
+	}
+}
+
+func httpCluster(service *dag.HTTPService) *v2.Cluster {
+	c := cluster(&service.TCPService)
+	switch service.Protocol {
+	case "h2":
+		c.TlsContext = UpstreamTLSContext()
+		fallthrough
+	case "h2c":
+		c.Http2ProtocolOptions = &core.Http2ProtocolOptions{}
+	}
+	return c
+}
+
+func cluster(service *dag.TCPService) *v2.Cluster {
+	c := &v2.Cluster{
 		Name:             Clustername(service),
 		Type:             v2.Cluster_EDS,
 		EdsClusterConfig: edsconfig("contour", service),
 		ConnectTimeout:   250 * time.Millisecond,
 		LbPolicy:         lbPolicy(service.LoadBalancerStrategy),
-		CommonLbConfig:   clusterCommonLBConfig(),
-		HealthChecks:     edshealthcheck(service.HealthCheck),
+		CommonLbConfig:   ClusterCommonLBConfig(),
+		HealthChecks:     edshealthcheck(service),
 	}
 	if anyPositive(service.MaxConnections, service.MaxPendingRequests, service.MaxRequests, service.MaxRetries) {
-		cluster.CircuitBreakers = &envoy_cluster.CircuitBreakers{
+		c.CircuitBreakers = &envoy_cluster.CircuitBreakers{
 			Thresholds: []*envoy_cluster.CircuitBreakers_Thresholds{{
 				MaxConnections:     u32nil(service.MaxConnections),
 				MaxPendingRequests: u32nil(service.MaxPendingRequests),
@@ -51,20 +73,13 @@ func Cluster(service *dag.Service) *v2.Cluster {
 			}},
 		}
 	}
-	switch service.Protocol {
-	case "h2":
-		cluster.TlsContext = UpstreamTLSContext()
-		fallthrough
-	case "h2c":
-		cluster.Http2ProtocolOptions = &core.Http2ProtocolOptions{}
-	}
-	return cluster
+	return c
 }
 
-func edsconfig(cluster string, service *dag.Service) *v2.Cluster_EdsClusterConfig {
+func edsconfig(cluster string, service *dag.TCPService) *v2.Cluster_EdsClusterConfig {
 	name := []string{
-		service.Namespace(),
-		service.Name(),
+		service.Namespace,
+		service.Name,
 		service.ServicePort.Name,
 	}
 	if name[2] == "" {
@@ -91,17 +106,17 @@ func lbPolicy(strategy string) v2.Cluster_LbPolicy {
 	}
 }
 
-func edshealthcheck(hc *ingressroutev1.HealthCheck) []*core.HealthCheck {
-	if hc == nil {
+func edshealthcheck(s *dag.TCPService) []*core.HealthCheck {
+	if s.HealthCheck == nil {
 		return nil
 	}
 	return []*core.HealthCheck{
-		healthCheck(hc),
+		healthCheck(s),
 	}
 }
 
 // Clustername returns the name of the CDS cluster for this service.
-func Clustername(service *dag.Service) string {
+func Clustername(service *dag.TCPService) string {
 	buf := service.LoadBalancerStrategy
 	if hc := service.HealthCheck; hc != nil {
 		if hc.TimeoutSeconds > 0 {
@@ -120,8 +135,8 @@ func Clustername(service *dag.Service) string {
 	}
 
 	hash := sha1.Sum([]byte(buf))
-	ns := service.Namespace()
-	name := service.Name()
+	ns := service.Namespace
+	name := service.Name
 	return hashname(60, ns, name, strconv.Itoa(int(service.Port)), fmt.Sprintf("%x", hash[:5]))
 }
 
@@ -197,7 +212,7 @@ func u32nil(val int) *types.UInt32Value {
 	}
 }
 
-func clusterCommonLBConfig() *v2.Cluster_CommonLbConfig {
+func ClusterCommonLBConfig() *v2.Cluster_CommonLbConfig {
 	return &v2.Cluster_CommonLbConfig{
 		HealthyPanicThreshold: &envoy_type.Percent{ // Disable HealthyPanicThreshold
 			Value: 0,

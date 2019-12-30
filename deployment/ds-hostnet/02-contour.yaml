@@ -23,7 +23,7 @@ spec:
     spec:
       hostNetwork: true
       containers:
-      - image: gcr.io/heptio-images/contour:v0.7.0
+      - image: gcr.io/heptio-images/contour:v0.8.0
         imagePullPolicy: Always
         ports:
         - containerPort: 8000
@@ -54,8 +54,12 @@ spec:
         volumeMounts:
         - name: contour-config
           mountPath: /config
+        lifecycle:
+          preStop:
+            exec:
+              command: ["wget", "-qO-", "http://localhost:9001/healthcheck/fail"] 
       initContainers:
-      - image: gcr.io/heptio-images/contour:v0.7.0
+      - image: gcr.io/heptio-images/contour:v0.8.0
         imagePullPolicy: Always
         name: envoy-initconfig
         command: ["contour"]
