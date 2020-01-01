@@ -57,9 +57,10 @@
     "envoy/api/v2/route",
     "envoy/config/accesslog/v2",
     "envoy/config/filter/accesslog/v2",
-    "envoy/config/filter/network/http_connection_manager/v2",
+    "envoy/config/filter/network/tcp_proxy/v2",
     "envoy/service/load_stats/v2",
     "envoy/type",
+    "pkg/util",
   ]
   pruneopts = ""
   revision = "51b27c23cab9d18a020bf06acb0ddd00d23a2d77"
@@ -210,6 +211,14 @@
   version = "v1.1.5"
 
 [[projects]]
+  digest = "1:f2aa69f65a54d69bea90194702bb2f044b1d2b55f7820180b3f37f033f0bd228"
+  name = "github.com/kkkmmu/workgroup"
+  packages = ["."]
+  pruneopts = ""
+  revision = "905fccf41a08323fdad6a1bd277290fdc54d92c3"
+  version = "v0.8.0-beta.1"
+
+[[projects]]
   digest = "1:6a874e3ddfb9db2b42bd8c85b6875407c702fa868eed20634ff489bc896ccfd3"
   name = "github.com/konsorten/go-windows-terminal-sequences"
   packages = ["."]
@@ -224,14 +233,6 @@
   pruneopts = ""
   revision = "e143189bf6f37b3957fb31743df6a1bcf4a8c685"
   version = "v0.0.10"
-
-[[projects]]
-  digest = "1:f2aa69f65a54d69bea90194702bb2f044b1d2b55f7820180b3f37f033f0bd228"
-  name = "github.com/kkkmmu/workgroup"
-  packages = ["."]
-  pruneopts = ""
-  revision = "905fccf41a08323fdad6a1bd277290fdc54d92c3"
-  version = "v0.8.0-beta.1"
 
 [[projects]]
   digest = "1:63722a4b1e1717be7b98fc686e0b30d5e7f734b9e93d7dee86293b6deab7ea28"
@@ -739,9 +740,10 @@
     "github.com/envoyproxy/go-control-plane/envoy/api/v2/route",
     "github.com/envoyproxy/go-control-plane/envoy/config/accesslog/v2",
     "github.com/envoyproxy/go-control-plane/envoy/config/filter/accesslog/v2",
-    "github.com/envoyproxy/go-control-plane/envoy/config/filter/network/http_connection_manager/v2",
+    "github.com/envoyproxy/go-control-plane/envoy/config/filter/network/tcp_proxy/v2",
     "github.com/envoyproxy/go-control-plane/envoy/service/load_stats/v2",
     "github.com/envoyproxy/go-control-plane/envoy/type",
+    "github.com/envoyproxy/go-control-plane/pkg/util",
     "github.com/evanphx/json-patch",
     "github.com/gogo/protobuf/jsonpb",
     "github.com/gogo/protobuf/proto",

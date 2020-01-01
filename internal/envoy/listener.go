@@ -134,13 +134,13 @@ func (t tcpServiceByName) Less(i, j int) bool {
 }
 
 // TCPProxyFilter creates a new listener filter using envoy.tcp_proxy
-func TCPProxyFilter(name string, svc *dag.Service, accessLog string) listener.Filter {
+func TCPProxyFilter(name string, proxy *dag.TCPProxy, accessLog string) listener.Filter {
 	return listener.Filter{
 		Name: "envoy.tcp_proxy",
 		Config: &types.Struct{
 			Fields: map[string]*types.Value{
 				"stat_prefix": sv(name),
-				"cluster":     sv(Clustername(svc)),
+				"cluster":     sv(Clustername(proxy.Services[0])),
 				"access_log":  accesslog(accessLog),
 			},
 		},

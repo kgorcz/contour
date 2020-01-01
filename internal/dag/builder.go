@@ -592,13 +592,13 @@ func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMat
 			m := meta{name: service.Name, namespace: ir.Namespace}
 			s := b.lookupTCPService(m, intstr.FromInt(service.Port), service.Weight, service.Strategy, service.HealthCheck)
 			if s == nil {
-				b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("tcpforward: service %s/%s: not found", ir.Namespace, service.Name), Vhost: host})
+				b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("tcpforward: service %s/%s: not found", ir.Namespace, service.Name), Vhost: host.Fqdn})
 				return
 			}
 			ts = append(ts, s)
 		}
-		b.lookupSecureVirtualHost(host, 443).VirtualHost.TCPProxy = &TCPProxy{Services: ts}
-		b.setStatus(Status{Object: ir, Status: StatusValid, Description: "valid IngressRoute", Vhost: host})
+		b.lookupSecureVirtualHost(host.Fqdn, host.Port).VirtualHost.TCPProxy = &TCPProxy{Services: ts}
+		b.setStatus(Status{Object: ir, Status: StatusValid, Description: "valid IngressRoute", Vhost: host.Fqdn})
 		// spec.forward implies spec.routes is ignored
 		return
 	}
@@ -626,11 +626,11 @@ func (b *builder) processIngressRoute(ir *ingressroutev1.IngressRoute, prefixMat
 			}
 			for _, service := range route.Services {
 				if service.Port < 1 || service.Port > 65535 {
-					b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("route %q: service %q: port must be in the range 1-65535", route.Match, service.Name), Vhost: host})
+					b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("route %q: service %q: port must be in the range 1-65535", route.Match, service.Name), Vhost: host.Fqdn})
 					return
 				}
 				if service.Weight < 0 {
-					b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("route %q: service %q: weight must be greater than or equal to zero", route.Match, service.Name), Vhost: host})
+					b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("route %q: service %q: weight must be greater than or equal to zero", route.Match, service.Name), Vhost: host.Fqdn})
 					return
 				}
 				m := meta{name: service.Name, namespace: ir.Namespace}

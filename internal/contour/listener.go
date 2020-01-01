@@ -234,8 +234,9 @@ func (v *listenerVisitor) visit(vertex dag.Vertex) {
 		v.http = true
 	case *dag.SecureVirtualHost:
 		data := vh.Data()
-		if data == nil {
+		if data == nil || len(data[v1.TLSCertKey]) == 0 || len(data[v1.TLSPrivateKeyKey]) == 0 {
 			// no secret for this vhost, skip it
+			logrus.Info("Skipping secure virtual host due to missing/empty secret: ", vh.VirtualHost.Host)
 			return
 		}
 		filters := []listener.Filter{
@@ -248,23 +249,27 @@ func (v *listenerVisitor) visit(vertex dag.Vertex) {
 			}
 			alpnProtos = nil // do not offer ALPN
 		}
-		
-		// old
-		if vh.Port == 443 {
-			logrus.Info("Creating 443 virtual host", vh.Host)
-			fc := listener.FilterChain{
-				FilterChainMatch: &listener.FilterChainMatch{
-					ServerNames: []string{vh.Host},
+
+		if vh.VirtualHost.Port != 443 {
+			logrus.Info("Creating tcp virtual host: ", vh.VirtualHost.Host, " | ", vh.VirtualHost.Port)
+			name := "ingress_tcp_port_" + strconv.Itoa(vh.VirtualHost.Port)
+			v.listeners[name] = &v2.Listener{
+				Name:    name,
+				Address: envoy.SocketAddress("0.0.0.0", vh.VirtualHost.Port),
+				FilterChains: []listener.FilterChain{
+					listener.FilterChain{
+						TlsContext: envoy.DownstreamTLSContext(data[v1.TLSCertKey], data[v1.TLSPrivateKeyKey], vh.MinProtoVersion),
+						Filters: []listener.Filter{
+							envoy.TCPProxyFilter(name, vh.TCPProxy, v.httpsAccessLog()),
+						},
+					},
 				},
-				TlsContext:    envoy.DownstreamTLSContext(data[v1.TLSCertKey], data[v1.TLSPrivateKeyKey], vh.MinProtoVersion, "h2", "http/1.1"),
-				Filters:       filters,
-				UseProxyProto: bv(v.UseProxyProto),
 			}
-			ingress_https.FilterChains = append(ingress_https.FilterChains, fc)
-		} else {
-			logrus.Info("TCP port virtual host: ", vh.Host, " | ", vh.Port)
-			tcp[vh.Port] = vh
+			alpnProtos = nil // do not offer ALPN
+			return
 		}
+
+		logrus.Info("Creating https virtual host: ", vh.VirtualHost.Host, " | ", vh.VirtualHost.Port)
 
 		// new
 		fc := listener.FilterChain{
@@ -280,51 +285,4 @@ func (v *listenerVisitor) visit(vertex dag.Vertex) {
 		// recurse
 		vertex.Visit(v.visit)
 	}
-	if len(ingress_https.FilterChains) > 0 {
-		m[ENVOY_HTTPS_LISTENER] = &ingress_https
-	}
-	// TODO:
-	// - where does m get returned to and is it expecting > 2?
-	// - how do secrets get matched to virtual hosts?
-	// - try without tls first
-	if len(tcp) > 0 {
-		logrus.Info("Found ", len(tcp), " tcp virtual hosts")
-		for _, svh := range tcp {
-			logrus.Info("Configuring tcp virtual host ", svh.Host)
-			var svcs []*dag.Service
-			svh.Visit(func(r dag.Vertex) {
-				switch r := r.(type) {
-				case *dag.Route:
-					r.Visit(func(s dag.Vertex) {
-						if s, ok := s.(*dag.Service); ok {
-							svcs = append(svcs, s)
-						}
-					})
-				case *dag.Secret:
-					logrus.Info("Visited secret ", r.Namespace(), ": ", r.Name())
-				}
-			})
-			if len(svcs) != 1 {
-				// no services for this route, skip it.
-				logrus.Error("TCP virtual host ", svh.Host, " did not have any services")
-				continue
-			}
-			svc := svcs[0]
-			name := "ingress_tcp_port_" + strconv.Itoa(svh.Port)
-			data := svh.Data()
-			m[name] = &v2.Listener{
-				Name:    name,
-				Address: envoy.SocketAddress("0.0.0.0", svh.Port),
-				FilterChains: []listener.FilterChain{
-					listener.FilterChain{
-						TlsContext: envoy.DownstreamTLSContext(data[v1.TLSCertKey], data[v1.TLSPrivateKeyKey], svh.MinProtoVersion),
-						Filters: []listener.Filter{
-							envoy.TCPProxyFilter(name, svc, v.httpsAccessLog()),
-						},
-					},
-				},
-			}
-		}
-	}
-	return m
 }
