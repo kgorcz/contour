@@ -233,12 +233,6 @@ func (v *listenerVisitor) visit(vertex dag.Vertex) {
 		// the listener properly.
 		v.http = true
 	case *dag.SecureVirtualHost:
-		data := vh.Data()
-		if data == nil || len(data[v1.TLSCertKey]) == 0 || len(data[v1.TLSPrivateKeyKey]) == 0 {
-			// no secret for this vhost, skip it
-			logrus.Info("Skipping secure virtual host due to missing/empty secret: ", vh.VirtualHost.Host)
-			return
-		}
 		filters := []listener.Filter{
 			envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, v.httpsAccessLog()),
 		}
@@ -253,19 +247,28 @@ func (v *listenerVisitor) visit(vertex dag.Vertex) {
 		if vh.VirtualHost.Port != 443 {
 			logrus.Info("Creating tcp virtual host: ", vh.VirtualHost.Host, " | ", vh.VirtualHost.Port)
 			name := "ingress_tcp_port_" + strconv.Itoa(vh.VirtualHost.Port)
+			fc := listener.FilterChain{
+				Filters: []listener.Filter{
+					envoy.TCPProxyFilter(name, vh.TCPProxy, v.httpsAccessLog()),
+				},
+			}
+			alpnProtos = nil // do not offer ALPN
+
+			// attach certificate data to this listener if provided.
+			if vh.Secret != nil {
+				data := vh.Secret.Data()
+				if len(data[v1.TLSCertKey]) != 0 && len(data[v1.TLSPrivateKeyKey]) != 0 {
+					fc.TlsContext = envoy.DownstreamTLSContext(data[v1.TLSCertKey], data[v1.TLSPrivateKeyKey], vh.MinProtoVersion, alpnProtos...)
+				}
+			}
+
 			v.listeners[name] = &v2.Listener{
 				Name:    name,
 				Address: envoy.SocketAddress("0.0.0.0", vh.VirtualHost.Port),
 				FilterChains: []listener.FilterChain{
-					listener.FilterChain{
-						TlsContext: envoy.DownstreamTLSContext(data[v1.TLSCertKey], data[v1.TLSPrivateKeyKey], vh.MinProtoVersion),
-						Filters: []listener.Filter{
-							envoy.TCPProxyFilter(name, vh.TCPProxy, v.httpsAccessLog()),
-						},
-					},
+					fc,
 				},
 			}
-			alpnProtos = nil // do not offer ALPN
 			return
 		}
 
@@ -276,10 +279,18 @@ func (v *listenerVisitor) visit(vertex dag.Vertex) {
 			FilterChainMatch: &listener.FilterChainMatch{
 				ServerNames: []string{vh.Host},
 			},
-			TlsContext:    envoy.DownstreamTLSContext(data[v1.TLSCertKey], data[v1.TLSPrivateKeyKey], vh.MinProtoVersion, alpnProtos...),
 			Filters:       filters,
 			UseProxyProto: bv(v.UseProxyProto),
 		}
+
+		// attach certificate data to this listener if provided.
+		if vh.Secret != nil {
+			data := vh.Secret.Data()
+			if len(data[v1.TLSCertKey]) != 0 && len(data[v1.TLSPrivateKeyKey]) != 0 {
+				fc.TlsContext = envoy.DownstreamTLSContext(data[v1.TLSCertKey], data[v1.TLSPrivateKeyKey], vh.MinProtoVersion, alpnProtos...)
+			}
+		}
+
 		v.listeners[ENVOY_HTTPS_LISTENER].FilterChains = append(v.listeners[ENVOY_HTTPS_LISTENER].FilterChains, fc)
 	default:
 		// recurse

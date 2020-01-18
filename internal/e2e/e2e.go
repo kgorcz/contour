@@ -11,9 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package e2e provides end-to-end tests.
 package e2e
-
-// grpc helpers
 
 import (
 	"net"
@@ -77,8 +76,9 @@ func setup(t *testing.T, opts ...func(*contour.ResourceEventHandler)) (cache.Res
 	}
 
 	reh := contour.ResourceEventHandler{
-		Notifier: ch,
-		Metrics:  ch.Metrics,
+		Notifier:    ch,
+		Metrics:     ch.Metrics,
+		FieldLogger: log,
 	}
 
 	for _, opt := range opts {

@@ -22,7 +22,7 @@ type IngressRouteSpec struct {
 	// Virtualhost appears at most once. If it is present, the object is considered
 	// to be a "root".
 	VirtualHost *VirtualHost `json:"virtualhost,omitempty"`
-	// Routes are the ingress routes. If Forward is present, Routes is ignored.
+	// Routes are the ingress routes. If TCPProxy is present, Routes is ignored.
 	Routes []Route `json:"routes"`
 	// TCPProxy holds TCP proxy information.
 	TCPProxy *TCPProxy `json:"tcpproxy,omitempty"`
@@ -43,12 +43,16 @@ type VirtualHost struct {
 
 // TLS describes tls properties. The CNI names that will be matched on
 // are described in fqdn, the tls.secretName secret must contain a
-// matching certificate
+// matching certificate unless tls.passthrough is set to true.
 type TLS struct {
 	// required, the name of a secret in the current namespace
 	SecretName string `json:"secretName"`
 	// Minimum TLS version this vhost should negotiate
 	MinimumProtocolVersion string `json:"minimumProtocolVersion,omitempty"`
+	// If Passthrough is set to true, the SecretName will be ignored
+	// and the encrypted handshake will be passed through to the
+	// backing cluster.
+	Passthrough bool `json:"passthrough,omitempty"`
 }
 
 // Route contains the set of routes for a virtual host
@@ -72,6 +76,8 @@ type Route struct {
 type TCPProxy struct {
 	// Services are the services to proxy traffic
 	Services []Service `json:"services,omitempty"`
+	// Delegate specifies that this tcpproxy should be delegated to another IngressRoute
+	Delegate *Delegate `json:"delegate,omitempty"`
 }
 
 // Service defines an upstream to proxy traffic to

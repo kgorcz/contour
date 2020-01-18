@@ -33,7 +33,7 @@ spec:
         - node0
         command:
         - envoy
-        image: docker.io/envoyproxy/envoy-alpine:v1.7.0
+        image: docker.io/envoyproxy/envoy-alpine:v1.8.0
         imagePullPolicy: IfNotPresent
         name: envoy
         ports:
@@ -70,7 +70,7 @@ spec:
         - $(CONTOUR_SERVICE_PORT)
         command:
         - contour
-        image: gcr.io/heptio-images/contour:v0.8.1
+        image: gcr.io/heptio-images/contour:v0.9.0
         imagePullPolicy: Always
         name: envoy-initconfig
         volumeMounts:

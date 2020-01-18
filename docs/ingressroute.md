@@ -746,8 +746,12 @@ IngressRoutes with a defined `virtualhost` field that are not in one of the allo
 
 Ingressroute supports proxying of TLS encapsulated TCP sessions.
 
-The TCP session must be encrypted with TLS.
+_Note_: The TCP session must be encrypted with TLS.
 This is necessary so that Envoy can use SNI to route the incoming request to the correct service.
+
+### TLS Termination at the edge
+
+If `spec.virtualhost.tls.secretName` is present then that secret will be used to decrypt the TCP traffic at the edge.
 
 ```
 apiVersion: contour.heptio.com/v1beta1
@@ -774,16 +778,43 @@ spec:
       port: 80
 ```
 
-The `spec.tcpproxy` key indicates that this _root_ IngressRoute will forward all de-encrypted TCP traffic to the backedn service.
+The `spec.tcpproxy` key indicates that this _root_ IngressRoute will forward the de-encrypted TCP traffic to the backend service.
+
+### TLS passthrough to the backend service
+
+If you wish to handle the TLS handshake at the backend service set `spec.virtualhost.tls.passthrough: true` indicates that once SNI demuxing is performed, the encrypted connection will be forwarded to the backend service. The backend service is expected to have a key which matches the SNI header received at the edge, and be capable of completing the TLS handshake. This is called SSL/TLS Passthrough.
+
+```
+apiVersion: contour.heptio.com/v1beta1
+kind: IngressRoute
+metadata:
+  name: example
+  namespace: default
+spec:
+  virtualhost:
+    fqdn: tcp.example.com
+    tls:
+      passthrough: true
+  tcpproxy:
+    services:
+    - name: tcpservice
+      port: 8080
+    - name: otherservice
+      port: 9999
+      weight: 20
+  routes:
+  - match: /
+    services:
+    - name: kuard
+      port: 80
+```
 
 ### Limitations
 
 The current limitations are present in Contour 0.8. These will be addressed in later Contour versions.
 
-- `spec.routes` must be present in the `IngressRoute` document to pass validation, however they are ignored when `spec.tcpproxy` is present.
-- TCP Proxy IngressRoutes must be roots and can not delegate to other IngressRoutes.
 - TCP Proxying is not available on Kubernetes Ingress objects.
-- `spec.virtualhost.tls` is required for TCP proxying. If not present, `spec.tcpproxy` will be ignored.
+- A dummy `spec.routes` entry is required for input validation.
 
 ## Status Reporting
 
