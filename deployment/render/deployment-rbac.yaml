@@ -60,7 +60,7 @@ spec:
                   properties:
                     secretName:
                       type: string
-                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$ # DNS-1123 subdomain
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?([\.\/][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                     minimumProtocolVersion:
                       type: string
                       enum:
@@ -164,6 +164,23 @@ spec:
   names:
     plural: tlscertificatedelegations
     kind: TLSCertificateDelegation
+  validation:
+    openAPIV3Schema:
+      properties:
+        spec:
+          properties:
+            delegations:
+              type: array
+              items:
+                type: object
+                required:
+                  - secretName
+                  - targetNamespaces
+                properties:
+                  match:
+                    type: string
+                  targetNamespaces:
+                    type: array
 ---
 apiVersion: extensions/v1beta1
 kind: Deployment
@@ -188,12 +205,12 @@ spec:
         prometheus.io/format: "prometheus"
     spec:
       containers:
-      - image: gcr.io/heptio-images/contour:v0.10.0
+      - image: gcr.io/heptio-images/contour:v0.11.0
         imagePullPolicy: Always
         name: contour
         command: ["contour"]
         args: ["serve", "--incluster"]
-      - image: docker.io/envoyproxy/envoy-alpine:v1.9.0
+      - image: docker.io/envoyproxy/envoy:v1.9.1
         name: envoy
         ports:
         - containerPort: 8080
@@ -206,7 +223,6 @@ spec:
         - --service-cluster cluster0
         - --service-node node0
         - --log-level info
-        - --v2-config-only
         readinessProbe:
           httpGet:
             path: /healthz
@@ -221,7 +237,7 @@ spec:
             exec:
               command: ["wget", "-qO-", "http://localhost:9001/healthcheck/fail"] 
       initContainers:
-      - image: gcr.io/heptio-images/contour:v0.10.0
+      - image: gcr.io/heptio-images/contour:v0.11.0
         imagePullPolicy: Always
         name: envoy-initconfig
         command: ["contour"]

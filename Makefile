@@ -9,6 +9,8 @@ TAG_LATEST ?= false
 GIT_REF = $(shell git rev-parse --short=8 --verify HEAD)
 VERSION ?= $(GIT_REF)
 
+export GO111MODULE=on
+
 test: install
 	go test ./...
 
@@ -18,15 +20,15 @@ test-race: | test
 vet: | test
 	go vet ./...
 
-check: test test-race vet gofmt staticcheck misspell unconvert ineffassign
+check: test test-race vet gofmt misspell unconvert ineffassign
 	@echo Checking rendered files are up to date
 	@(cd deployment && bash render.sh && git diff --exit-code . || (echo "rendered files are out of date" && exit 1))
 
 install:
 	go install -v -tags "oidc gcp" ./...
 
-dep:
-	dep ensure -vendor-only -v
+download:
+	go mod download
 
 container:
 	docker build . -t $(IMAGE):$(VERSION)
@@ -47,7 +49,7 @@ local: $(LOCAL_BOOTSTRAP_CONFIG)
 		--mount type=bind,source=$(CURDIR),target=/config \
 		-p 9001:9001 \
 		-p 8002:8002 \
-		docker.io/envoyproxy/envoy-alpine:v1.9.0 \
+		docker.io/envoyproxy/envoy-alpine:v1.9.1 \
 		envoy \
 		--config-path /config/$< \
 		--service-node node0 \
@@ -93,6 +95,6 @@ updategenerated:
 	@echo Updating CRD generated code...
 	@(bash hack/update-generated-crd-code.sh)
 
-gofmt:  
+gofmt:
 	@echo Checking code is gofmted
 	@test -z "$(shell gofmt -s -l -d -e $(SRCDIRS) | tee /dev/stderr)"

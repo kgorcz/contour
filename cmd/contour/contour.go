@@ -19,10 +19,12 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 
 	clientset "github.com/heptio/contour/apis/generated/clientset/versioned"
+	contourinformers "github.com/heptio/contour/apis/generated/informers/externalversions"
 	"github.com/heptio/contour/internal/contour"
 	"github.com/heptio/contour/internal/debug"
 	"github.com/heptio/contour/internal/envoy"
@@ -34,6 +36,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
+	coreinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -116,11 +119,11 @@ func main() {
 		Builder: &reh.Builder,
 	}
 
-	serve.Flag("debug-http-address", "address the debug http endpoint will bind too").Default("127.0.0.1").StringVar(&debugsvc.Addr)
-	serve.Flag("debug-http-port", "port the debug http endpoint will bind too").Default("6060").IntVar(&debugsvc.Port)
+	serve.Flag("debug-http-address", "address the debug http endpoint will bind to").Default("127.0.0.1").StringVar(&debugsvc.Addr)
+	serve.Flag("debug-http-port", "port the debug http endpoint will bind to").Default("6060").IntVar(&debugsvc.Port)
 
-	serve.Flag("http-address", "address the metrics http endpoint will bind too").Default("0.0.0.0").StringVar(&metricsvc.Addr)
-	serve.Flag("http-port", "port the metrics http endpoint will bind too").Default("8000").IntVar(&metricsvc.Port)
+	serve.Flag("http-address", "address the metrics http endpoint will bind to").Default("0.0.0.0").StringVar(&metricsvc.Addr)
+	serve.Flag("http-port", "port the metrics http endpoint will bind to").Default("8000").IntVar(&metricsvc.Port)
 
 	serve.Flag("envoy-http-access-log", "Envoy HTTP access log").Default(contour.DEFAULT_HTTP_ACCESS_LOG).StringVar(&ch.HTTPAccessLog)
 	serve.Flag("envoy-https-access-log", "Envoy HTTPS access log").Default(contour.DEFAULT_HTTPS_ACCESS_LOG).StringVar(&ch.HTTPSAccessLog)
@@ -165,12 +168,15 @@ func main() {
 
 		client, contourClient := newClient(*kubeconfig, *inCluster)
 
-		wl := log.WithField("context", "watch")
-		k8s.WatchServices(&g, client, wl, &reh)
-		k8s.WatchIngress(&g, client, wl, &reh)
-		k8s.WatchSecrets(&g, client, wl, &reh)
-		k8s.WatchIngressRoutes(&g, contourClient, wl, &reh)
-		k8s.WatchTLSCertificateDelegations(&g, contourClient, wl, &reh)
+		// resync timer disabled for Contour
+		coreInformers := coreinformers.NewSharedInformerFactory(client, 0)
+		contourInformers := contourinformers.NewSharedInformerFactory(contourClient, 0)
+
+		coreInformers.Core().V1().Services().Informer().AddEventHandler(&reh)
+		coreInformers.Extensions().V1beta1().Ingresses().Informer().AddEventHandler(&reh)
+		coreInformers.Core().V1().Secrets().Informer().AddEventHandler(&reh)
+		contourInformers.Contour().V1beta1().IngressRoutes().Informer().AddEventHandler(&reh)
+		contourInformers.Contour().V1beta1().TLSCertificateDelegations().Informer().AddEventHandler(&reh)
 
 		ch.IngressRouteStatus = &k8s.IngressRouteStatus{
 			Client: contourClient,
@@ -181,7 +187,10 @@ func main() {
 		et := &contour.EndpointsTranslator{
 			FieldLogger: log.WithField("context", "endpointstranslator"),
 		}
-		k8s.WatchEndpoints(&g, client, wl, et)
+		coreInformers.Core().V1().Endpoints().Informer().AddEventHandler(et)
+
+		g.Add(startInformer(coreInformers, log.WithField("context", "coreinformers")))
+		g.Add(startInformer(contourInformers, log.WithField("context", "contourinformers")))
 
 		ch.Metrics = metrics
 		reh.Metrics = metrics
@@ -239,6 +248,24 @@ func newClient(kubeconfig string, inCluster bool) (*kubernetes.Clientset, *clien
 	contourClient, err := clientset.NewForConfig(config)
 	check(err)
 	return client, contourClient
+}
+
+type informer interface {
+	WaitForCacheSync(stopCh <-chan struct{}) map[reflect.Type]bool
+	Start(stopCh <-chan struct{})
+}
+
+func startInformer(inf informer, log logrus.FieldLogger) func(stop <-chan struct{}) error {
+	return func(stop <-chan struct{}) error {
+		log.Println("waiting for cache sync")
+		inf.WaitForCacheSync(stop)
+
+		log.Println("started")
+		defer log.Println("stopping")
+		inf.Start(stop)
+		<-stop
+		return nil
+	}
 }
 
 func check(err error) {

@@ -43,9 +43,12 @@ func Cluster(s dag.Service) *v2.Cluster {
 
 func httpCluster(service *dag.HTTPService) *v2.Cluster {
 	c := cluster(&service.TCPService)
+
 	switch service.Protocol {
-	case "h2":
+	case "tls":
 		c.TlsContext = UpstreamTLSContext()
+	case "h2":
+		c.TlsContext = UpstreamTLSContext("h2")
 		fallthrough
 	case "h2c":
 		c.Http2ProtocolOptions = &core.Http2ProtocolOptions{}
@@ -55,14 +58,14 @@ func httpCluster(service *dag.HTTPService) *v2.Cluster {
 
 func cluster(service *dag.TCPService) *v2.Cluster {
 	c := &v2.Cluster{
-		Name:             Clustername(service),
-		AltStatName:      altStatName(service),
-		Type:             v2.Cluster_EDS,
-		EdsClusterConfig: edsconfig("contour", service),
-		ConnectTimeout:   250 * time.Millisecond,
-		LbPolicy:         lbPolicy(service.LoadBalancerStrategy),
-		CommonLbConfig:   ClusterCommonLBConfig(),
-		HealthChecks:     edshealthcheck(service),
+		Name:                 Clustername(service),
+		AltStatName:          altStatName(service),
+		ClusterDiscoveryType: ClusterDiscoveryType(v2.Cluster_EDS),
+		EdsClusterConfig:     edsconfig("contour", service),
+		ConnectTimeout:       250 * time.Millisecond,
+		LbPolicy:             lbPolicy(service.LoadBalancerStrategy),
+		CommonLbConfig:       ClusterCommonLBConfig(),
+		HealthChecks:         edshealthcheck(service),
 	}
 
 	// Drain connections immediately if using healthchecks and the endpoint is known to be removed
@@ -249,4 +252,8 @@ func ConfigSource(cluster string) *core.ConfigSource {
 			},
 		},
 	}
+}
+
+func ClusterDiscoveryType(t v2.Cluster_DiscoveryType) *v2.Cluster_Type {
+	return &v2.Cluster_Type{Type: t}
 }

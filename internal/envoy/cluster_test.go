@@ -55,9 +55,9 @@ func TestCluster(t *testing.T) {
 				TCPService: service(s1),
 			},
 			want: &v2.Cluster{
-				Name:        "default/kuard/443/da39a3ee5e",
-				AltStatName: "default_kuard_443",
-				Type:        v2.Cluster_EDS,
+				Name:                 "default/kuard/443/da39a3ee5e",
+				AltStatName:          "default_kuard_443",
+				ClusterDiscoveryType: ClusterDiscoveryType(v2.Cluster_EDS),
 				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
 					EdsConfig:   ConfigSource("contour"),
 					ServiceName: "default/kuard/http",
@@ -73,9 +73,9 @@ func TestCluster(t *testing.T) {
 				Protocol:   "h2c",
 			},
 			want: &v2.Cluster{
-				Name:        "default/kuard/443/da39a3ee5e",
-				AltStatName: "default_kuard_443",
-				Type:        v2.Cluster_EDS,
+				Name:                 "default/kuard/443/da39a3ee5e",
+				AltStatName:          "default_kuard_443",
+				ClusterDiscoveryType: ClusterDiscoveryType(v2.Cluster_EDS),
 				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
 					EdsConfig:   ConfigSource("contour"),
 					ServiceName: "default/kuard/http",
@@ -92,18 +92,37 @@ func TestCluster(t *testing.T) {
 				Protocol:   "h2",
 			},
 			want: &v2.Cluster{
-				Name:        "default/kuard/443/da39a3ee5e",
-				AltStatName: "default_kuard_443",
-				Type:        v2.Cluster_EDS,
+				Name:                 "default/kuard/443/da39a3ee5e",
+				AltStatName:          "default_kuard_443",
+				ClusterDiscoveryType: ClusterDiscoveryType(v2.Cluster_EDS),
 				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
 					EdsConfig:   ConfigSource("contour"),
 					ServiceName: "default/kuard/http",
 				},
 				ConnectTimeout:       250 * time.Millisecond,
 				LbPolicy:             v2.Cluster_ROUND_ROBIN,
+				TlsContext:           UpstreamTLSContext("h2"),
 				Http2ProtocolOptions: &core.Http2ProtocolOptions{},
-				TlsContext:           UpstreamTLSContext(),
 				CommonLbConfig:       ClusterCommonLBConfig(),
+			},
+		},
+		"tls upstream": {
+			service: &dag.HTTPService{
+				TCPService: service(s1),
+				Protocol:   "tls",
+			},
+			want: &v2.Cluster{
+				Name:                 "default/kuard/443/da39a3ee5e",
+				AltStatName:          "default_kuard_443",
+				ClusterDiscoveryType: ClusterDiscoveryType(v2.Cluster_EDS),
+				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
+					EdsConfig:   ConfigSource("contour"),
+					ServiceName: "default/kuard/http",
+				},
+				ConnectTimeout: 250 * time.Millisecond,
+				LbPolicy:       v2.Cluster_ROUND_ROBIN,
+				TlsContext:     UpstreamTLSContext(),
+				CommonLbConfig: ClusterCommonLBConfig(),
 			},
 		},
 		"contour.heptio.com/max-connections": {
@@ -115,9 +134,9 @@ func TestCluster(t *testing.T) {
 				},
 			},
 			want: &v2.Cluster{
-				Name:        "default/kuard/443/da39a3ee5e",
-				AltStatName: "default_kuard_443",
-				Type:        v2.Cluster_EDS,
+				Name:                 "default/kuard/443/da39a3ee5e",
+				AltStatName:          "default_kuard_443",
+				ClusterDiscoveryType: ClusterDiscoveryType(v2.Cluster_EDS),
 				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
 					EdsConfig:   ConfigSource("contour"),
 					ServiceName: "default/kuard/http",
@@ -141,9 +160,9 @@ func TestCluster(t *testing.T) {
 				},
 			},
 			want: &v2.Cluster{
-				Name:        "default/kuard/443/da39a3ee5e",
-				AltStatName: "default_kuard_443",
-				Type:        v2.Cluster_EDS,
+				Name:                 "default/kuard/443/da39a3ee5e",
+				AltStatName:          "default_kuard_443",
+				ClusterDiscoveryType: ClusterDiscoveryType(v2.Cluster_EDS),
 				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
 					EdsConfig:   ConfigSource("contour"),
 					ServiceName: "default/kuard/http",
@@ -167,9 +186,9 @@ func TestCluster(t *testing.T) {
 				},
 			},
 			want: &v2.Cluster{
-				Name:        "default/kuard/443/da39a3ee5e",
-				AltStatName: "default_kuard_443",
-				Type:        v2.Cluster_EDS,
+				Name:                 "default/kuard/443/da39a3ee5e",
+				AltStatName:          "default_kuard_443",
+				ClusterDiscoveryType: ClusterDiscoveryType(v2.Cluster_EDS),
 				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
 					EdsConfig:   ConfigSource("contour"),
 					ServiceName: "default/kuard/http",
@@ -193,9 +212,9 @@ func TestCluster(t *testing.T) {
 				},
 			},
 			want: &v2.Cluster{
-				Name:        "default/kuard/443/da39a3ee5e",
-				AltStatName: "default_kuard_443",
-				Type:        v2.Cluster_EDS,
+				Name:                 "default/kuard/443/da39a3ee5e",
+				AltStatName:          "default_kuard_443",
+				ClusterDiscoveryType: ClusterDiscoveryType(v2.Cluster_EDS),
 				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
 					EdsConfig:   ConfigSource("contour"),
 					ServiceName: "default/kuard/http",
@@ -216,9 +235,9 @@ func TestCluster(t *testing.T) {
 				ServicePort: &s1.Spec.Ports[0],
 			},
 			want: &v2.Cluster{
-				Name:        "default/kuard/443/da39a3ee5e",
-				AltStatName: "default_kuard_443",
-				Type:        v2.Cluster_EDS,
+				Name:                 "default/kuard/443/da39a3ee5e",
+				AltStatName:          "default_kuard_443",
+				ClusterDiscoveryType: ClusterDiscoveryType(v2.Cluster_EDS),
 				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
 					EdsConfig:   ConfigSource("contour"),
 					ServiceName: "default/kuard/http",
@@ -226,6 +245,42 @@ func TestCluster(t *testing.T) {
 				ConnectTimeout: 250 * time.Millisecond,
 				LbPolicy:       v2.Cluster_ROUND_ROBIN,
 				CommonLbConfig: ClusterCommonLBConfig(),
+			},
+		},
+		"tcp service with healthcheck": {
+			service: &dag.TCPService{
+				Name: s1.Name, Namespace: s1.Namespace,
+				ServicePort: &s1.Spec.Ports[0],
+				HealthCheck: &ingressroutev1.HealthCheck{
+					Path: "/healthz",
+				},
+			},
+			want: &v2.Cluster{
+				Name:                 "default/kuard/443/bc862a33ca",
+				AltStatName:          "default_kuard_443",
+				ClusterDiscoveryType: ClusterDiscoveryType(v2.Cluster_EDS),
+				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
+					EdsConfig:   ConfigSource("contour"),
+					ServiceName: "default/kuard/http",
+				},
+				ConnectTimeout:                250 * time.Millisecond,
+				LbPolicy:                      v2.Cluster_ROUND_ROBIN,
+				CommonLbConfig:                ClusterCommonLBConfig(),
+				DrainConnectionsOnHostRemoval: true,
+				HealthChecks: []*core.HealthCheck{
+					{
+						Timeout:            secondsOrDefault(0, hcTimeout),
+						Interval:           secondsOrDefault(0, hcInterval),
+						UnhealthyThreshold: countOrDefault(0, hcUnhealthyThreshold),
+						HealthyThreshold:   countOrDefault(0, hcHealthyThreshold),
+						HealthChecker: &core.HealthCheck_HttpHealthCheck_{
+							HttpHealthCheck: &core.HealthCheck_HttpHealthCheck{
+								Host: hcHost,
+								Path: "/healthz",
+							},
+						},
+					},
+				},
 			},
 		},
 	}

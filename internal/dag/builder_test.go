@@ -14,7 +14,6 @@
 package dag
 
 import (
-	"reflect"
 	"sort"
 	"testing"
 	"time"
@@ -543,6 +542,24 @@ func TestDAGInsert(t *testing.T) {
 			Namespace: "default",
 			Annotations: map[string]string{
 				"contour.heptio.com/upstream-protocol.h2": "80,http",
+			},
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:       "http",
+				Protocol:   "TCP",
+				Port:       80,
+				TargetPort: intstr.FromInt(8888),
+			}},
+		},
+	}
+
+	s3c := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"contour.heptio.com/upstream-protocol.tls": "80,http",
 			},
 		},
 		Spec: v1.ServiceSpec{
@@ -2644,6 +2661,33 @@ func TestDAGInsert(t *testing.T) {
 				},
 			),
 		},
+		"tls service annotation": {
+			objs: []interface{}{
+				i3a, s3c,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						&VirtualHost{
+							Name: "*",
+							routes: routemap(
+								route("/", i3a, servicemap(
+									&HTTPService{
+										TCPService: TCPService{
+											Name:        s3c.Name,
+											Namespace:   s3c.Namespace,
+											ServicePort: &s3c.Spec.Ports[0],
+										},
+										Protocol: "tls",
+									},
+								)),
+							),
+						},
+					),
+				},
+			),
+		},
 		"insert ingress then service w/ upstream annotations": {
 			objs: []interface{}{
 				i1,
@@ -2742,6 +2786,205 @@ func TestDAGInsert(t *testing.T) {
 									}),
 								),
 							),
+						},
+					),
+				},
+			),
+		},
+		"ingressroute delegated to non existent object": {
+			objs: []interface{}{
+				&ingressroutev1.IngressRoute{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "default",
+						Name:      "example-com",
+					},
+					Spec: ingressroutev1.IngressRouteSpec{
+						VirtualHost: &ingressroutev1.VirtualHost{
+							Fqdn: "example.com",
+						},
+						Routes: []ingressroutev1.Route{{
+							Match: "/finance",
+							Delegate: &ingressroutev1.Delegate{
+								Name:      "non-existent",
+								Namespace: "non-existent",
+							},
+						}},
+					},
+				},
+			},
+			want: nil, // no listener created
+		},
+		"ingressroute delegates to itself": {
+			objs: []interface{}{
+				&ingressroutev1.IngressRoute{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "default",
+						Name:      "example-com",
+					},
+					Spec: ingressroutev1.IngressRouteSpec{
+						VirtualHost: &ingressroutev1.VirtualHost{
+							Fqdn: "example.com",
+						},
+						Routes: []ingressroutev1.Route{{
+							Match: "/finance",
+							Delegate: &ingressroutev1.Delegate{
+								Name:      "example-com",
+								Namespace: "default",
+							},
+						}},
+					},
+				},
+			},
+			want: nil, // no listener created
+		},
+		"ingressroute delegates to incorrect prefix": {
+			objs: []interface{}{
+				&ingressroutev1.IngressRoute{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "default",
+						Name:      "example-com",
+					},
+					Spec: ingressroutev1.IngressRouteSpec{
+						VirtualHost: &ingressroutev1.VirtualHost{
+							Fqdn: "example.com",
+						},
+						Routes: []ingressroutev1.Route{{
+							Match: "/finance",
+							Delegate: &ingressroutev1.Delegate{
+								Name:      "finance-root",
+								Namespace: "finance",
+							},
+						}},
+					},
+				},
+				&ingressroutev1.IngressRoute{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "finance",
+						Name:      "finance-root",
+					},
+					Spec: ingressroutev1.IngressRouteSpec{
+						Routes: []ingressroutev1.Route{{
+							Match: "/prefixDoesntMatch",
+							Services: []ingressroutev1.Service{{
+								Name: "home",
+							}},
+						}},
+					},
+				},
+			},
+			want: nil, // no listener created
+		},
+		"ingressroute delegate to prefix, but no matching path in delegate": {
+			objs: []interface{}{
+				&ingressroutev1.IngressRoute{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "default",
+						Name:      "example-com",
+					},
+					Spec: ingressroutev1.IngressRouteSpec{
+						VirtualHost: &ingressroutev1.VirtualHost{
+							Fqdn: "example.com",
+						},
+						Routes: []ingressroutev1.Route{{
+							Match: "/foo",
+							Delegate: &ingressroutev1.Delegate{
+								Name:      "finance-root",
+								Namespace: "finance",
+							},
+						}},
+					},
+				},
+				&ingressroutev1.IngressRoute{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "finance",
+						Name:      "finance-root",
+					},
+					Spec: ingressroutev1.IngressRouteSpec{
+						Routes: []ingressroutev1.Route{{
+							Match: "/foobar",
+							Services: []ingressroutev1.Service{{
+								Name: "home",
+							}},
+						}, {
+							Match: "/foo/bar",
+							Services: []ingressroutev1.Service{{
+								Name: "home",
+							}},
+						}},
+					},
+				},
+			},
+			want: nil, // no listener created
+		},
+		"ingressroute cycle": {
+			objs: []interface{}{
+				&ingressroutev1.IngressRoute{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "default",
+						Name:      "example-com",
+					},
+					Spec: ingressroutev1.IngressRouteSpec{
+						VirtualHost: &ingressroutev1.VirtualHost{
+							Fqdn: "example.com",
+						},
+						Routes: []ingressroutev1.Route{{
+							Match: "/finance",
+							Delegate: &ingressroutev1.Delegate{
+								Name:      "finance-root",
+								Namespace: "finance",
+							},
+						}},
+					},
+				},
+				&ingressroutev1.IngressRoute{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "finance",
+						Name:      "finance-root",
+					},
+					Spec: ingressroutev1.IngressRouteSpec{
+						Routes: []ingressroutev1.Route{{
+							Match: "/finance",
+							Services: []ingressroutev1.Service{{
+								Name: "home",
+								Port: 8080,
+							}},
+						}, {
+							Match: "/finance/stocks",
+							Delegate: &ingressroutev1.Delegate{
+								Name:      "example-com",
+								Namespace: "default",
+							},
+						}},
+					},
+				},
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						&VirtualHost{
+							Name: "example.com",
+							routes: routemap(&Route{Prefix: "/finance", object: &ingressroutev1.IngressRoute{
+								ObjectMeta: metav1.ObjectMeta{
+									Namespace: "finance",
+									Name:      "finance-root",
+								},
+								Spec: ingressroutev1.IngressRouteSpec{
+									Routes: []ingressroutev1.Route{{
+										Match: "/finance",
+										Services: []ingressroutev1.Service{{
+											Name: "home",
+											Port: 8080,
+										}},
+									}, {
+										Match: "/finance/stocks",
+										Delegate: &ingressroutev1.Delegate{
+											Name:      "example-com",
+											Namespace: "default",
+										},
+									}},
+								},
+							}}),
 						},
 					),
 				},
@@ -2879,196 +3122,6 @@ func TestBuilderLookupHTTPService(t *testing.T) {
 	}
 }
 
-func TestDAGIngressRouteCycle(t *testing.T) {
-	ir1 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      "example-com",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "example.com",
-			},
-			Routes: []ingressroutev1.Route{{
-				Match: "/finance",
-				Delegate: &ingressroutev1.Delegate{
-					Name:      "finance-root",
-					Namespace: "finance",
-				},
-			}},
-		},
-	}
-	ir2 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "finance",
-			Name:      "finance-root",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			Routes: []ingressroutev1.Route{{
-				Match: "/finance",
-				Services: []ingressroutev1.Service{{
-					Name: "home",
-					Port: 8080,
-				}},
-			}, {
-				Match: "/finance/stocks",
-				Delegate: &ingressroutev1.Delegate{
-					Name:      "example-com",
-					Namespace: "default",
-				},
-			}},
-		},
-	}
-
-	var b Builder
-	b.Insert(ir2)
-	b.Insert(ir1)
-	dag := b.Build()
-
-	got := make(map[int]*Listener)
-	dag.Visit(listenerMap(got).Visit)
-
-	want := make(map[int]*Listener)
-	want[80] = &Listener{
-		Port: 80,
-		VirtualHosts: virtualhosts(
-			&VirtualHost{
-				Name:   "example.com",
-				routes: routemap(&Route{Prefix: "/finance", object: ir2}),
-			},
-		),
-	}
-
-	opts := []cmp.Option{
-		cmp.AllowUnexported(Listener{}, VirtualHost{}, Route{}),
-	}
-	if diff := cmp.Diff(want, got, opts...); diff != "" {
-		t.Fatal(diff)
-	}
-}
-
-func TestDAGIngressRouteCycleSelfEdge(t *testing.T) {
-	ir1 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      "example-com",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "example.com",
-			},
-			Routes: []ingressroutev1.Route{{
-				Match: "/finance",
-				Delegate: &ingressroutev1.Delegate{
-					Name:      "example-com",
-					Namespace: "default",
-				},
-			}},
-		},
-	}
-
-	var b Builder
-	b.Insert(ir1)
-	dag := b.Build()
-
-	got := make(map[int]*Listener)
-	dag.Visit(listenerMap(got).Visit)
-
-	want := make(map[int]*Listener)
-	opts := []cmp.Option{
-		cmp.AllowUnexported(VirtualHost{}, Route{}),
-	}
-	if diff := cmp.Diff(want, got, opts...); diff != "" {
-		t.Fatal(diff)
-	}
-}
-
-func TestDAGIngressRouteDelegatesToNonExistent(t *testing.T) {
-	ir1 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      "example-com",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "example.com",
-			},
-			Routes: []ingressroutev1.Route{{
-				Match: "/finance",
-				Delegate: &ingressroutev1.Delegate{
-					Name:      "non-existent",
-					Namespace: "non-existent",
-				},
-			}},
-		},
-	}
-
-	var b Builder
-	b.Insert(ir1)
-	dag := b.Build()
-
-	got := make(map[int]*Listener)
-	dag.Visit(listenerMap(got).Visit)
-
-	want := make(map[int]*Listener)
-	opts := []cmp.Option{
-		cmp.AllowUnexported(VirtualHost{}, Route{}),
-	}
-	if diff := cmp.Diff(want, got, opts...); diff != "" {
-		t.Fatal(diff)
-	}
-}
-
-func TestDAGIngressRouteDelegatePrefixDoesntMatch(t *testing.T) {
-	ir1 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      "example-com",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "example.com",
-			},
-			Routes: []ingressroutev1.Route{{
-				Match: "/finance",
-				Delegate: &ingressroutev1.Delegate{
-					Name:      "finance-root",
-					Namespace: "finance",
-				},
-			}},
-		},
-	}
-	ir2 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "finance",
-			Name:      "finance-root",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			Routes: []ingressroutev1.Route{{
-				Match: "/prefixDoesntMatch",
-				Services: []ingressroutev1.Service{{
-					Name: "home",
-				}},
-			}},
-		},
-	}
-
-	var b Builder
-	b.Insert(ir2)
-	b.Insert(ir1)
-	dag := b.Build()
-
-	got := make(map[int]*Listener)
-	dag.Visit(listenerMap(got).Visit)
-
-	want := make(map[int]*Listener)
-	opts := []cmp.Option{
-		cmp.AllowUnexported(VirtualHost{}, Route{}),
-	}
-	if diff := cmp.Diff(want, got, opts...); diff != "" {
-		t.Fatal(diff)
-	}
-}
 func TestDAGRootNamespaces(t *testing.T) {
 	ir1 := &ingressroutev1.IngressRoute{
 		ObjectMeta: metav1.ObjectMeta{
@@ -3179,62 +3232,6 @@ func TestDAGRootNamespaces(t *testing.T) {
 				t.Errorf("wanted %d vertices, but got %d", tc.want, count)
 			}
 		})
-	}
-}
-
-func TestDAGIngressRouteDelegatePrefixMatchesStringPrefixButNotPathPrefix(t *testing.T) {
-	ir1 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      "example-com",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "example.com",
-			},
-			Routes: []ingressroutev1.Route{{
-				Match: "/foo",
-				Delegate: &ingressroutev1.Delegate{
-					Name:      "finance-root",
-					Namespace: "finance",
-				},
-			}},
-		},
-	}
-	ir2 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "finance",
-			Name:      "finance-root",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			Routes: []ingressroutev1.Route{{
-				Match: "/foobar",
-				Services: []ingressroutev1.Service{{
-					Name: "home",
-				}},
-			}, {
-				Match: "/foo/bar",
-				Services: []ingressroutev1.Service{{
-					Name: "home",
-				}},
-			}},
-		},
-	}
-
-	var b Builder
-	b.Insert(ir2)
-	b.Insert(ir1)
-	dag := b.Build()
-
-	got := make(map[int]*Listener)
-	dag.Visit(listenerMap(got).Visit)
-
-	want := make(map[int]*Listener)
-	opts := []cmp.Option{
-		cmp.AllowUnexported(VirtualHost{}, Route{}),
-	}
-	if diff := cmp.Diff(want, got, opts...); diff != "" {
-		t.Fatal(diff)
 	}
 }
 
@@ -3691,7 +3688,7 @@ func TestDAGIngressRouteStatus(t *testing.T) {
 			for _, ex := range tc.want {
 				var found bool
 				for _, g := range got {
-					if reflect.DeepEqual(ex, g) {
+					if cmp.Equal(ex, g) {
 						found = true
 						break
 					}
@@ -3826,8 +3823,8 @@ func TestDAGIngressRouteUniqueFQDNs(t *testing.T) {
 
 			gotStatus := dag.statuses
 			sort.Stable(statusByNamespaceAndName(gotStatus))
-			if !reflect.DeepEqual(tc.wantStatus, gotStatus) {
-				t.Fatal("expected:\n", tc.wantStatus, "\ngot:\n", dag.statuses)
+			if diff := cmp.Diff(tc.wantStatus, gotStatus); diff != "" {
+				t.Fatal(diff)
 			}
 		})
 	}
@@ -3886,8 +3883,8 @@ func TestHttpPaths(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			got := httppaths(tc.rule)
-			if !reflect.DeepEqual(tc.want, got) {
-				t.Fatalf("expected:\n%v\ngot:\n%v", tc.want, got)
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Fatalf(diff)
 			}
 		})
 	}
@@ -3923,8 +3920,8 @@ func TestEnforceRoute(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			got := routeEnforceTLS(tc.tlsEnabled, tc.permitInsecure)
-			if !reflect.DeepEqual(tc.want, got) {
-				t.Fatalf("expected:\n%v\ngot:\n%v", tc.want, got)
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Fatalf(diff)
 			}
 		})
 	}

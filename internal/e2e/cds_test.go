@@ -20,6 +20,7 @@ import (
 
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	envoy_cluster "github.com/envoyproxy/go-control-plane/envoy/api/v2/cluster"
+	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
 	"github.com/gogo/protobuf/types"
 	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
 	"github.com/heptio/contour/internal/envoy"
@@ -511,9 +512,9 @@ func TestClusterCircuitbreakerAnnotations(t *testing.T) {
 		VersionInfo: "0",
 		Resources: []types.Any{
 			any(t, &v2.Cluster{
-				Name:        "default/kuard/8080/da39a3ee5e",
-				AltStatName: "default_kuard_8080",
-				Type:        v2.Cluster_EDS,
+				Name:                 "default/kuard/8080/da39a3ee5e",
+				AltStatName:          "default_kuard_8080",
+				ClusterDiscoveryType: envoy.ClusterDiscoveryType(v2.Cluster_EDS),
 				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
 					EdsConfig:   envoy.ConfigSource("contour"),
 					ServiceName: "default/kuard",
@@ -557,9 +558,9 @@ func TestClusterCircuitbreakerAnnotations(t *testing.T) {
 		VersionInfo: "0",
 		Resources: []types.Any{
 			any(t, &v2.Cluster{
-				Name:        "default/kuard/8080/da39a3ee5e",
-				AltStatName: "default_kuard_8080",
-				Type:        v2.Cluster_EDS,
+				Name:                 "default/kuard/8080/da39a3ee5e",
+				AltStatName:          "default_kuard_8080",
+				ClusterDiscoveryType: envoy.ClusterDiscoveryType(v2.Cluster_EDS),
 				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
 					EdsConfig:   envoy.ConfigSource("contour"),
 					ServiceName: "default/kuard",
@@ -683,9 +684,9 @@ func TestClusterLoadBalancerStrategyPerRoute(t *testing.T) {
 		VersionInfo: "0",
 		Resources: []types.Any{
 			any(t, &v2.Cluster{
-				Name:        "default/kuard/80/58d888c08a",
-				AltStatName: "default_kuard_80",
-				Type:        v2.Cluster_EDS,
+				Name:                 "default/kuard/80/58d888c08a",
+				AltStatName:          "default_kuard_80",
+				ClusterDiscoveryType: envoy.ClusterDiscoveryType(v2.Cluster_EDS),
 				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
 					EdsConfig:   envoy.ConfigSource("contour"),
 					ServiceName: "default/kuard",
@@ -695,9 +696,9 @@ func TestClusterLoadBalancerStrategyPerRoute(t *testing.T) {
 				CommonLbConfig: envoy.ClusterCommonLBConfig(),
 			}),
 			any(t, &v2.Cluster{
-				Name:        "default/kuard/80/843e4ded8f",
-				AltStatName: "default_kuard_80",
-				Type:        v2.Cluster_EDS,
+				Name:                 "default/kuard/80/843e4ded8f",
+				AltStatName:          "default_kuard_80",
+				ClusterDiscoveryType: envoy.ClusterDiscoveryType(v2.Cluster_EDS),
 				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
 					EdsConfig:   envoy.ConfigSource("contour"),
 					ServiceName: "default/kuard",
@@ -706,6 +707,106 @@ func TestClusterLoadBalancerStrategyPerRoute(t *testing.T) {
 				LbPolicy:       v2.Cluster_MAGLEV,
 				CommonLbConfig: envoy.ClusterCommonLBConfig(),
 			}),
+		},
+		TypeUrl: clusterType,
+		Nonce:   "0",
+	}, streamCDS(t, cc))
+}
+
+func TestClusterWithHealthChecks(t *testing.T) {
+	rh, cc, done := setup(t)
+	defer done()
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       80,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	rh.OnAdd(&ingressroutev1.IngressRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: ingressroutev1.IngressRouteSpec{
+			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "www.example.com"},
+			Routes: []ingressroutev1.Route{{
+				Match: "/a",
+				Services: []ingressroutev1.Service{{
+					Name:   "kuard",
+					Port:   80,
+					Weight: 90,
+					HealthCheck: &ingressroutev1.HealthCheck{
+						Path: "/healthz",
+					},
+				}},
+			}},
+		},
+	})
+
+	assertEqual(t, &v2.DiscoveryResponse{
+		VersionInfo: "0",
+		Resources: []types.Any{
+			any(t, clusterWithHealthCheck("default/kuard/80/bc862a33ca", "default/kuard", "default_kuard_80", "/healthz", true)),
+		},
+		TypeUrl: clusterType,
+		Nonce:   "0",
+	}, streamCDS(t, cc))
+}
+
+// Test that contour correctly recognizes the "contour.heptio.com/upstream-protocol.tls"
+// service annotation.
+func TestClusterServiceTLSBackend(t *testing.T) {
+	rh, cc, done := setup(t)
+	defer done()
+
+	i1 := &v1beta1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "default",
+		},
+		Spec: v1beta1.IngressSpec{
+			Backend: &v1beta1.IngressBackend{
+				ServiceName: "kuard",
+				ServicePort: intstr.FromInt(443),
+			},
+		},
+	}
+	rh.OnAdd(i1)
+
+	s1 := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"contour.heptio.com/upstream-protocol.tls": "securebackend",
+			},
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:       "securebackend",
+				Protocol:   "TCP",
+				Port:       443,
+				TargetPort: intstr.FromInt(8888),
+			}},
+		},
+	}
+	rh.OnAdd(s1)
+
+	want := tlscluster("default/kuard/443/da39a3ee5e", "default/kuard/securebackend", "default_kuard_443")
+
+	assertEqual(t, &v2.DiscoveryResponse{
+		VersionInfo: "0",
+		Resources: []types.Any{
+			any(t, want),
 		},
 		TypeUrl: clusterType,
 		Nonce:   "0",
@@ -738,9 +839,9 @@ func streamCDS(t *testing.T, cc *grpc.ClientConn, rn ...string) *v2.DiscoveryRes
 
 func cluster(name, servicename, statName string) *v2.Cluster {
 	return &v2.Cluster{
-		Name:        name,
-		Type:        v2.Cluster_EDS,
-		AltStatName: statName,
+		Name:                 name,
+		ClusterDiscoveryType: envoy.ClusterDiscoveryType(v2.Cluster_EDS),
+		AltStatName:          statName,
 		EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
 			EdsConfig:   envoy.ConfigSource("contour"),
 			ServiceName: servicename,
@@ -749,4 +850,32 @@ func cluster(name, servicename, statName string) *v2.Cluster {
 		LbPolicy:       v2.Cluster_ROUND_ROBIN,
 		CommonLbConfig: envoy.ClusterCommonLBConfig(),
 	}
+}
+
+func tlscluster(name, servicename, statsName string) *v2.Cluster {
+	c := cluster(name, servicename, statsName)
+	c.TlsContext = envoy.UpstreamTLSContext()
+	return c
+}
+
+func clusterWithHealthCheck(name, servicename, statName, healthCheckPath string, drainConnOnHostRemoval bool) *v2.Cluster {
+	c := cluster(name, servicename, statName)
+	timeout := 2 * time.Second
+	interval := 10 * time.Second
+	unhealthyThreshold := types.UInt32Value{Value: 3}
+	healthyThreshold := types.UInt32Value{Value: 2}
+	c.HealthChecks = []*core.HealthCheck{{
+		Timeout:            &timeout,
+		Interval:           &interval,
+		UnhealthyThreshold: &unhealthyThreshold,
+		HealthyThreshold:   &healthyThreshold,
+		HealthChecker: &core.HealthCheck_HttpHealthCheck_{
+			HttpHealthCheck: &core.HealthCheck_HttpHealthCheck{
+				Host: "contour-envoy-healthcheck",
+				Path: healthCheckPath,
+			},
+		},
+	}}
+	c.DrainConnectionsOnHostRemoval = drainConnOnHostRemoval
+	return c
 }
