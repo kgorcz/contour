@@ -26,14 +26,14 @@ spec:
       containers:
       - args:
         - -c
-        - /config/contour.yaml
+        - /config/contour.json
         - --service-cluster
         - cluster0
         - --service-node
         - node0
         command:
         - envoy
-        image: docker.io/envoyproxy/envoy-alpine:v1.8.0
+        image: docker.io/envoyproxy/envoy-alpine:v1.9.0
         imagePullPolicy: IfNotPresent
         name: envoy
         ports:
@@ -63,14 +63,14 @@ spec:
       initContainers:
       - args:
         - bootstrap
-        - /config/contour.yaml
+        - /config/contour.json
         - --xds-address
         - $(CONTOUR_SERVICE_HOST)
         - --xds-port
         - $(CONTOUR_SERVICE_PORT)
         command:
         - contour
-        image: gcr.io/heptio-images/contour:v0.9.0
+        image: gcr.io/heptio-images/contour:v0.10.0
         imagePullPolicy: Always
         name: envoy-initconfig
         volumeMounts:

@@ -44,9 +44,8 @@ var ingressrouteRootNamespaceFlag string
 func main() {
 	log := logrus.StandardLogger()
 	app := kingpin.New("contour", "Heptio Contour Kubernetes ingress controller.")
+	var config envoy.BootstrapConfig
 	bootstrap := app.Command("bootstrap", "Generate bootstrap configuration.")
-
-	var config envoy.ConfigWriter
 	path := bootstrap.Arg("path", "Configuration file.").Required().String()
 	bootstrap.Flag("admin-address", "Envoy admin interface address").StringVar(&config.AdminAddress)
 	bootstrap.Flag("admin-port", "Envoy admin interface port").IntVar(&config.AdminPort)
@@ -125,10 +124,12 @@ func main() {
 
 	serve.Flag("envoy-http-access-log", "Envoy HTTP access log").Default(contour.DEFAULT_HTTP_ACCESS_LOG).StringVar(&ch.HTTPAccessLog)
 	serve.Flag("envoy-https-access-log", "Envoy HTTPS access log").Default(contour.DEFAULT_HTTPS_ACCESS_LOG).StringVar(&ch.HTTPSAccessLog)
-	serve.Flag("envoy-http-address", "Envoy HTTP listener address").StringVar(&ch.HTTPAddress)
-	serve.Flag("envoy-https-address", "Envoy HTTPS listener address").StringVar(&ch.HTTPSAddress)
-	serve.Flag("envoy-http-port", "Envoy HTTP listener port").IntVar(&ch.HTTPPort)
-	serve.Flag("envoy-https-port", "Envoy HTTPS listener port").IntVar(&ch.HTTPSPort)
+	serve.Flag("envoy-external-http-port", "External port for HTTP requests").Default("80").IntVar(&reh.ExternalInsecurePort)
+	serve.Flag("envoy-external-https-port", "External port for HTTPS requests").Default("443").IntVar(&reh.ExternalSecurePort)
+	serve.Flag("envoy-service-http-address", "Kubernetes Service address for HTTP requests").Default("0.0.0.0").StringVar(&ch.HTTPAddress)
+	serve.Flag("envoy-service-https-address", "Kubernetes Service address for HTTPS requests").Default("0.0.0.0").StringVar(&ch.HTTPSAddress)
+	serve.Flag("envoy-service-http-port", "Kubernetes Service port for HTTP requests").Default("8080").IntVar(&ch.HTTPPort)
+	serve.Flag("envoy-service-https-port", "Kubernetes Service port for HTTPS requests").Default("8443").IntVar(&ch.HTTPSPort)
 	serve.Flag("use-proxy-protocol", "Use PROXY protocol for all listeners").BoolVar(&ch.UseProxyProto)
 	serve.Flag("ingress-class-name", "Contour IngressClass name").StringVar(&reh.IngressClass)
 	serve.Flag("ingressroute-root-namespaces", "Restrict contour to searching these namespaces for root ingress routes").StringVar(&ingressrouteRootNamespaceFlag)
@@ -169,6 +170,7 @@ func main() {
 		k8s.WatchIngress(&g, client, wl, &reh)
 		k8s.WatchSecrets(&g, client, wl, &reh)
 		k8s.WatchIngressRoutes(&g, contourClient, wl, &reh)
+		k8s.WatchTLSCertificateDelegations(&g, contourClient, wl, &reh)
 
 		ch.IngressRouteStatus = &k8s.IngressRouteStatus{
 			Client: contourClient,
@@ -214,7 +216,7 @@ func main() {
 			defer log.Println("stopped")
 			return s.Serve(l)
 		})
-		g.Run()
+		_ = g.Run()
 	default:
 		app.Usage(args)
 		os.Exit(2)

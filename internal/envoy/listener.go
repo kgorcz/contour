@@ -16,6 +16,7 @@ package envoy
 import (
 	"sort"
 
+	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/auth"
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/listener"
@@ -27,9 +28,39 @@ import (
 // TLSInspector returns a new TLS inspector listener filter.
 func TLSInspector() listener.ListenerFilter {
 	return listener.ListenerFilter{
-		Name:   util.TlsInspector,
-		Config: new(types.Struct),
+		Name: util.TlsInspector,
+		ConfigType: &listener.ListenerFilter_Config{
+			Config: new(types.Struct),
+		},
 	}
+}
+
+// ProxyProtocol returns a new Proxy Protocol listener filter.
+func ProxyProtocol() listener.ListenerFilter {
+	return listener.ListenerFilter{
+		Name: util.ProxyProtocol,
+		ConfigType: &listener.ListenerFilter_Config{
+			Config: new(types.Struct),
+		},
+	}
+}
+
+// Listener returns a new v2.Listener for the supplied address, port, and filters.
+func Listener(name, address string, port int, lf []listener.ListenerFilter, filters ...listener.Filter) *v2.Listener {
+	l := &v2.Listener{
+		Name:            name,
+		Address:         *SocketAddress(address, port),
+		ListenerFilters: lf,
+	}
+	if len(filters) > 0 {
+		l.FilterChains = append(
+			l.FilterChains,
+			listener.FilterChain{
+				Filters: filters,
+			},
+		)
+	}
+	return l
 }
 
 // HTTPConnectionManager creates a new HTTP Connection Manager filter
@@ -37,40 +68,42 @@ func TLSInspector() listener.ListenerFilter {
 func HTTPConnectionManager(routename, accessLogPath string) listener.Filter {
 	return listener.Filter{
 		Name: util.HTTPConnectionManager,
-		Config: &types.Struct{
-			Fields: map[string]*types.Value{
-				"stat_prefix": sv(routename),
-				"rds": st(map[string]*types.Value{
-					"route_config_name": sv(routename),
-					"config_source": st(map[string]*types.Value{
-						"api_config_source": st(map[string]*types.Value{
-							"api_type": sv("GRPC"),
-							"grpc_services": lv(
-								st(map[string]*types.Value{
-									"envoy_grpc": st(map[string]*types.Value{
-										"cluster_name": sv("contour"),
+		ConfigType: &listener.Filter_Config{
+			Config: &types.Struct{
+				Fields: map[string]*types.Value{
+					"stat_prefix": sv(routename),
+					"rds": st(map[string]*types.Value{
+						"route_config_name": sv(routename),
+						"config_source": st(map[string]*types.Value{
+							"api_config_source": st(map[string]*types.Value{
+								"api_type": sv("GRPC"),
+								"grpc_services": lv(
+									st(map[string]*types.Value{
+										"envoy_grpc": st(map[string]*types.Value{
+											"cluster_name": sv("contour"),
+										}),
 									}),
-								}),
-							),
+								),
+							}),
 						}),
 					}),
-				}),
-				"http_filters": lv(
-					st(map[string]*types.Value{
-						"name": sv(util.Gzip),
+					"http_filters": lv(
+						st(map[string]*types.Value{
+							"name": sv(util.Gzip),
+						}),
+						st(map[string]*types.Value{
+							"name": sv(util.GRPCWeb),
+						}),
+						st(map[string]*types.Value{
+							"name": sv(util.Router),
+						}),
+					),
+					"http_protocol_options": st(map[string]*types.Value{
+						"accept_http_10": {Kind: &types.Value_BoolValue{BoolValue: true}},
 					}),
-					st(map[string]*types.Value{
-						"name": sv(util.GRPCWeb),
-					}),
-					st(map[string]*types.Value{
-						"name": sv(util.Router),
-					}),
-				),
-				"http_protocol_options": st(map[string]*types.Value{
-					"accept_http_10": {Kind: &types.Value_BoolValue{BoolValue: true}},
-				}),
-				"access_log":         accesslog(accessLogPath),
-				"use_remote_address": {Kind: &types.Value_BoolValue{BoolValue: true}}, // TODO(jbeda) should this ever be false?
+					"access_log":         accesslog(accessLogPath),
+					"use_remote_address": {Kind: &types.Value_BoolValue{BoolValue: true}}, // TODO(jbeda) should this ever be false?
+				},
 			},
 		},
 	}
@@ -82,11 +115,13 @@ func TCPProxy(statPrefix string, proxy *dag.TCPProxy, accessLogPath string) list
 	case 1:
 		return listener.Filter{
 			Name: util.TCPProxy,
-			Config: &types.Struct{
-				Fields: map[string]*types.Value{
-					"stat_prefix": sv(statPrefix),
-					"cluster":     sv(Clustername(proxy.Services[0])),
-					"access_log":  accesslog(accessLogPath),
+			ConfigType: &listener.Filter_Config{
+				Config: &types.Struct{
+					Fields: map[string]*types.Value{
+						"stat_prefix": sv(statPrefix),
+						"cluster":     sv(Clustername(proxy.Services[0])),
+						"access_log":  accesslog(accessLogPath),
+					},
 				},
 			},
 		}
@@ -109,13 +144,15 @@ func TCPProxy(statPrefix string, proxy *dag.TCPProxy, accessLogPath string) list
 		}
 		return listener.Filter{
 			Name: util.TCPProxy,
-			Config: &types.Struct{
-				Fields: map[string]*types.Value{
-					"stat_prefix": sv(statPrefix),
-					"weighted_clusters": st(map[string]*types.Value{
-						"clusters": lv(l...),
-					}),
-					"access_log": accesslog(accessLogPath),
+			ConfigType: &listener.Filter_Config{
+				Config: &types.Struct{
+					Fields: map[string]*types.Value{
+						"stat_prefix": sv(statPrefix),
+						"weighted_clusters": st(map[string]*types.Value{
+							"clusters": lv(l...),
+						}),
+						"access_log": accesslog(accessLogPath),
+					},
 				},
 			},
 		}
@@ -133,23 +170,9 @@ func (t tcpServiceByName) Less(i, j int) bool {
 	return t[i].Name < t[j].Name
 }
 
-// TCPProxyFilter creates a new listener filter using envoy.tcp_proxy
-func TCPProxyFilter(name string, proxy *dag.TCPProxy, accessLog string) listener.Filter {
-	return listener.Filter{
-		Name: "envoy.tcp_proxy",
-		Config: &types.Struct{
-			Fields: map[string]*types.Value{
-				"stat_prefix": sv(name),
-				"cluster":     sv(Clustername(proxy.Services[0])),
-				"access_log":  accesslog(accessLog),
-			},
-		},
-	}
-}
-
 // SocketAddress creates a new TCP core.Address.
-func SocketAddress(address string, port int) core.Address {
-	return core.Address{
+func SocketAddress(address string, port int) *core.Address {
+	return &core.Address{
 		Address: &core.Address_SocketAddress{
 			SocketAddress: &core.SocketAddress{
 				Protocol: core.TCP,

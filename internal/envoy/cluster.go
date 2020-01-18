@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2"
+	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	envoy_cluster "github.com/envoyproxy/go-control-plane/envoy/api/v2/cluster"
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type"
@@ -64,6 +64,12 @@ func cluster(service *dag.TCPService) *v2.Cluster {
 		CommonLbConfig:   ClusterCommonLBConfig(),
 		HealthChecks:     edshealthcheck(service),
 	}
+
+	// Drain connections immediately if using healthchecks and the endpoint is known to be removed
+	if service.HealthCheck != nil {
+		c.DrainConnectionsOnHostRemoval = true
+	}
+
 	if anyPositive(service.MaxConnections, service.MaxPendingRequests, service.MaxRequests, service.MaxRetries) {
 		c.CircuitBreakers = &envoy_cluster.CircuitBreakers{
 			Thresholds: []*envoy_cluster.CircuitBreakers_Thresholds{{
@@ -223,6 +229,24 @@ func ClusterCommonLBConfig() *v2.Cluster_CommonLbConfig {
 	return &v2.Cluster_CommonLbConfig{
 		HealthyPanicThreshold: &envoy_type.Percent{ // Disable HealthyPanicThreshold
 			Value: 0,
+		},
+	}
+}
+
+// ConfigSource returns a *core.ConfigSource for cluster.
+func ConfigSource(cluster string) *core.ConfigSource {
+	return &core.ConfigSource{
+		ConfigSourceSpecifier: &core.ConfigSource_ApiConfigSource{
+			ApiConfigSource: &core.ApiConfigSource{
+				ApiType: core.ApiConfigSource_GRPC,
+				GrpcServices: []*core.GrpcService{{
+					TargetSpecifier: &core.GrpcService_EnvoyGrpc_{
+						EnvoyGrpc: &core.GrpcService_EnvoyGrpc{
+							ClusterName: cluster,
+						},
+					},
+				}},
+			},
 		},
 	}
 }

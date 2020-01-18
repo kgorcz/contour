@@ -18,7 +18,7 @@ package dag
 import (
 	"time"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/auth"
 	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
@@ -96,15 +96,14 @@ func (r *Route) Visit(f func(Vertex)) {
 	}
 }
 
-// A VirtualHost represents an insecure HTTP host.
+// A VirtualHost represents a named L4/L7 service.
 type VirtualHost struct {
-	// Port is the port that the VirtualHost will listen on.
-	// Expected values are 80 and 443, but others are possible
-	// if the VirtualHost is generated inside Contour.
+	// Name is the fully qualified domain name of a network host,
+	// as defined by RFC 3986.
+	Name string
+
 	Port int
 
-	// Host name
-	Host   string
 	routes map[string]*Route
 
 	// Service to TCP proxy all incoming connections.
@@ -158,9 +157,28 @@ type Service interface {
 	toMeta() servicemeta
 }
 
+// A Listener represents a TCP socket that accepts
+// incoming connections.
+type Listener struct {
+
+	// Address is the TCP address to listen on.
+	// If blank 0.0.0.0, or ::/0 for IPv6, is assumed.
+	Address string
+
+	// Port is the TCP port to listen on.
+	Port int
+
+	VirtualHosts map[string]Vertex
+}
+
+func (l *Listener) Visit(f func(Vertex)) {
+	for _, vh := range l.VirtualHosts {
+		f(vh)
+	}
+}
+
 // TCPProxy represents a cluster of TCP endpoints.
 type TCPProxy struct {
-
 	// Services to proxy decrypted traffic to.
 	Services []*TCPService
 }

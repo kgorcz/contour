@@ -240,6 +240,9 @@ spec:
           port: 80
 ```
 
+If the `tls.secretName` property contains a slash, eg. `somenamespace/somesecret` then, subject to TLS Certificate Delegation, the TLS certificate will be read from `somesecret` in `somenamespace`.
+See TLS Certificate Delegation below for more information.
+
 The TLS **Minimum Protocol Version** a vhost should negotiate can be specified by setting the `spec.virtualhost.tls.minimumProtocolVersion`:
   - 1.3
   - 1.2
@@ -269,6 +272,42 @@ spec:
           port: 80
           permitInsecure: true
 ```
+
+#### TLS Certificate Delegation
+
+In order to support wildcard certificates, TLS certificates for a `*.somedomain.com`, which are stored in a namespace controlled by the cluster administrator, Contour supports a facility known as TLS Certificate Delegation.
+This facility allows the owner of a TLS certificate to delegate, for the purposes of reference the TLS certificate, the when processing an IngressRoute to Contour will reference the Secret object from another namespace.
+
+```yaml
+apiVersion: contour.heptio.com/v1beta1
+kind: TLSCertificateDelegation
+metadata:
+  name: example-com-wildcard
+  namespace: www-admin
+spec:
+  delegations:
+    secretName: example-com-wildcard
+    targetNamespaces:
+    - example-com
+---
+apiVersion: contour.heptio.com/v1beta1
+kind: IngressRoute
+metadata:
+  name: www
+  namespace: example-com
+spec:
+  virtualhost:
+    fqdn: foo2.bar.com
+    tls:
+      secretName: www-admin/example-com-wildcard
+  routes:
+    - match: /
+      services:
+        - name: s1
+          port: 80
+```
+
+In this example, the permission for Contour to reference the Secret `example-com-wildcard` in the `admin` namespace has been delegated to IngressRoute objects in the `example-com` namespace.
 
 ### Routing
 
@@ -577,8 +616,8 @@ spec:
 
 A key feature of the IngressRoute specification is route delegation which follows the working model of DNS:
 
-> As the owner of a DNS domain, for example `heptio.com`, I delegate to another nameserver the responsibility for handing the subdomain `app.heptio.com`.
-> Any nameserver can hold a record for `app.heptio.com`, but without the linkage from the parent `heptio.com` nameserver, its information is unreachable and non authoritative.
+> As the owner of a DNS domain, for example `whitehouse.gov`, I delegate to another nameserver the responsibility for handing the subdomain `treasury.whitehouse.gov`.
+> Any nameserver can hold a record for `treasury.whitehouse.gov`, but without the linkage from the parent `whitehouse.gov` nameserver, its information is unreachable and non authoritative.
 
 The "root" IngressRoute is the only entry point for an ingress virtual host and is used as the top level configuration of a cluster's ingress resources.
 Each root IngressRoute defines a `virtualhost` key, which describes properties such as the fully qualified name of the virtual host, TLS configuration, etc.
@@ -753,7 +792,7 @@ This is necessary so that Envoy can use SNI to route the incoming request to the
 
 If `spec.virtualhost.tls.secretName` is present then that secret will be used to decrypt the TCP traffic at the edge.
 
-```
+```yaml
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
 metadata:
@@ -784,7 +823,7 @@ The `spec.tcpproxy` key indicates that this _root_ IngressRoute will forward the
 
 If you wish to handle the TLS handshake at the backend service set `spec.virtualhost.tls.passthrough: true` indicates that once SNI demuxing is performed, the encrypted connection will be forwarded to the backend service. The backend service is expected to have a key which matches the SNI header received at the edge, and be capable of completing the TLS handshake. This is called SSL/TLS Passthrough.
 
-```
+```yaml
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
 metadata:

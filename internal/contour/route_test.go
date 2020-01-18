@@ -331,7 +331,9 @@ func TestRouteVisit(t *testing.T) {
 							Match: envoy.PrefixMatch("/"),
 							Action: &route.Route_Redirect{
 								Redirect: &route.RedirectAction{
-									HttpsRedirect: true,
+									SchemeRewriteSpecifier: &route.RedirectAction_HttpsRedirect{
+										HttpsRedirect: true,
+									},
 								},
 							},
 						}},
@@ -481,7 +483,9 @@ func TestRouteVisit(t *testing.T) {
 							Match: envoy.PrefixMatch("/"),
 							Action: &route.Route_Redirect{
 								Redirect: &route.RedirectAction{
-									HttpsRedirect: true,
+									SchemeRewriteSpecifier: &route.RedirectAction_HttpsRedirect{
+										HttpsRedirect: true,
+									},
 								},
 							},
 						}},
@@ -1724,7 +1728,11 @@ func routecluster(cluster string) *route.Route_Route {
 
 func websocketroute(c string) *route.Route_Route {
 	r := routecluster(c)
-	r.Route.UseWebsocket = bv(true)
+	r.Route.UpgradeConfigs = append(r.Route.UpgradeConfigs,
+		&route.RouteAction_UpgradeConfig{
+			UpgradeType: "websocket",
+		},
+	)
 	return r
 }
 
@@ -1736,7 +1744,7 @@ func routetimeout(cluster string, timeout *time.Duration) *route.Route_Route {
 
 func routeretry(cluster string, retryOn string, numRetries int, perTryTimeout time.Duration) *route.Route_Route {
 	r := routecluster(cluster)
-	r.Route.RetryPolicy = &route.RouteAction_RetryPolicy{
+	r.Route.RetryPolicy = &route.RetryPolicy{
 		RetryOn: retryOn,
 	}
 	if numRetries > 0 {

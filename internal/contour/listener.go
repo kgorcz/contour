@@ -64,8 +64,8 @@ type ListenerVisitorConfig struct {
 	// If not set, defaults to DEFAULT_HTTPS_ACCESS_LOG.
 	HTTPSAccessLog string
 
-	// UseProxyProto configurs all listeners to expect a PROXY protocol
-	// V1 header on new connections.
+	// UseProxyProto configurs all listeners to expect a PROXY
+	// V1 or V2 preamble.
 	// If not set, defaults to false.
 	UseProxyProto bool
 }
@@ -195,34 +195,45 @@ func visitListeners(root dag.Vertex, lvc *ListenerVisitorConfig) map[string]*v2.
 	lv := listenerVisitor{
 		ListenerVisitorConfig: lvc,
 		listeners: map[string]*v2.Listener{
-			ENVOY_HTTP_LISTENER: {
-				Name:    ENVOY_HTTP_LISTENER,
-				Address: envoy.SocketAddress(lvc.httpAddress(), lvc.httpPort()),
-				FilterChains: []listener.FilterChain{{
-					Filters: []listener.Filter{
-						envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, lvc.httpAccessLog()),
-					},
-					UseProxyProto: bv(lvc.UseProxyProto),
-				}},
-			},
-			ENVOY_HTTPS_LISTENER: {
-				Name:    ENVOY_HTTPS_LISTENER,
-				Address: envoy.SocketAddress(lvc.httpsAddress(), lvc.httpsPort()),
-				ListenerFilters: []listener.ListenerFilter{
-					envoy.TLSInspector(),
-				},
-			},
+			ENVOY_HTTPS_LISTENER: envoy.Listener(
+				ENVOY_HTTPS_LISTENER,
+				lvc.httpsAddress(), lvc.httpsPort(),
+				secureProxyProtocol(lvc.UseProxyProto),
+			),
 		},
 	}
 	lv.visit(root)
 
-	if !lv.http {
-		delete(lv.listeners, ENVOY_HTTP_LISTENER)
+	// add a listener if there are vhosts bound to http.
+	if lv.http {
+		lv.listeners[ENVOY_HTTP_LISTENER] = envoy.Listener(
+			ENVOY_HTTP_LISTENER,
+			lvc.httpAddress(), lvc.httpPort(),
+			proxyProtocol(lvc.UseProxyProto),
+			envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, lvc.httpAccessLog()),
+		)
+
 	}
+
+	// remove the https listener if there are no vhosts bound to it.
 	if len(lv.listeners[ENVOY_HTTPS_LISTENER].FilterChains) == 0 {
 		delete(lv.listeners, ENVOY_HTTPS_LISTENER)
 	}
+
 	return lv.listeners
+}
+
+func proxyProtocol(useProxy bool) []listener.ListenerFilter {
+	if useProxy {
+		return []listener.ListenerFilter{
+			envoy.ProxyProtocol(),
+		}
+	}
+	return nil
+}
+
+func secureProxyProtocol(useProxy bool) []listener.ListenerFilter {
+	return append(proxyProtocol(useProxy), envoy.TLSInspector())
 }
 
 func (v *listenerVisitor) visit(vertex dag.Vertex) {
@@ -245,11 +256,11 @@ func (v *listenerVisitor) visit(vertex dag.Vertex) {
 		}
 
 		if vh.VirtualHost.Port != 443 {
-			logrus.Info("Creating tcp virtual host: ", vh.VirtualHost.Host, " | ", vh.VirtualHost.Port)
+			logrus.Info("Creating tcp virtual host: ", vh.VirtualHost.Name, " | ", vh.VirtualHost.Port)
 			name := "ingress_tcp_port_" + strconv.Itoa(vh.VirtualHost.Port)
 			fc := listener.FilterChain{
 				Filters: []listener.Filter{
-					envoy.TCPProxyFilter(name, vh.TCPProxy, v.httpsAccessLog()),
+					envoy.TCPProxy(name, vh.TCPProxy, v.httpsAccessLog()),
 				},
 			}
 			alpnProtos = nil // do not offer ALPN
@@ -264,7 +275,7 @@ func (v *listenerVisitor) visit(vertex dag.Vertex) {
 
 			v.listeners[name] = &v2.Listener{
 				Name:    name,
-				Address: envoy.SocketAddress("0.0.0.0", vh.VirtualHost.Port),
+				Address: *envoy.SocketAddress("0.0.0.0", vh.VirtualHost.Port),
 				FilterChains: []listener.FilterChain{
 					fc,
 				},
@@ -272,15 +283,14 @@ func (v *listenerVisitor) visit(vertex dag.Vertex) {
 			return
 		}
 
-		logrus.Info("Creating https virtual host: ", vh.VirtualHost.Host, " | ", vh.VirtualHost.Port)
+		logrus.Info("Creating https virtual host: ", vh.VirtualHost.Name, " | ", vh.VirtualHost.Port)
 
 		// new
 		fc := listener.FilterChain{
 			FilterChainMatch: &listener.FilterChainMatch{
-				ServerNames: []string{vh.Host},
+				ServerNames: []string{vh.VirtualHost.Name},
 			},
-			Filters:       filters,
-			UseProxyProto: bv(v.UseProxyProto),
+			Filters: filters,
 		}
 
 		// attach certificate data to this listener if provided.

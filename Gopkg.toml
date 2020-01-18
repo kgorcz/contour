@@ -12,17 +12,16 @@ required = [
 
 [[constraint]]
   name = "k8s.io/apimachinery"
-  version = "kubernetes-1.11.4"
+  version = "kubernetes-1.11.7"
 
 [[constraint]]
   name = "k8s.io/api"
-  version = "kubernetes-1.11.4"
+  version = "kubernetes-1.11.7"
 
 [[constraint]]
   name = "k8s.io/code-generator"
-  version = "kubernetes-1.11.4"
+  version = "kubernetes-1.11.7"
 
 [[constraint]]
   name = "github.com/envoyproxy/go-control-plane"
-  # 0.6.1 matches Envoy v1.8.0, higher versions are for 1.9-dev
-  version = "=0.6.1"
+  version = "=0.6.7"
