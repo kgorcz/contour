@@ -3,8 +3,12 @@ REGISTRY ?= gcr.io/heptio-images
 IMAGE := $(REGISTRY)/$(PROJECT)
 SRCDIRS := ./cmd ./internal ./apis
 PKGS := $(shell GO111MODULE=on go list -mod=readonly ./cmd/... ./internal/...)
-LOCAL_BOOTSTRAP_CONFIG = config.yaml
+LOCAL_BOOTSTRAP_CONFIG = localenvoyconfig.yaml
 TAG_LATEST ?= false
+# Used to supply a local Envoy docker container an IP to connect to that is running
+# 'contour serve'. On MacOS this will work, but may not on other OSes. Defining
+# LOCALIP as an env var before running 'make local' will solve that.
+LOCALIP ?= $(shell ifconfig | grep inet | grep -v '::' | grep -v 127.0.0.1 | head -n1 | awk '{print $$2}')
 
 GIT_REF = $(shell git rev-parse --short=8 --verify HEAD)
 VERSION ?= $(GIT_REF)
@@ -20,9 +24,9 @@ test-race: | test
 vet: | test
 	go vet ./...
 
-check: test test-race vet gofmt staticcheck misspell unconvert ineffassign
+check: test test-race vet gofmt staticcheck misspell unconvert unparam ineffassign
 	@echo Checking rendered files are up to date
-	@(cd deployment && bash render.sh && git diff --exit-code . || (echo "rendered files are out of date" && exit 1))
+	@(cd examples && bash render.sh && git diff --exit-code . || (echo "rendered files are out of date" && exit 1))
 
 install:
 	go install -mod=readonly -v -tags "oidc gcp" ./...
@@ -41,15 +45,14 @@ ifeq ($(TAG_LATEST), true)
 endif
 
 $(LOCAL_BOOTSTRAP_CONFIG): install
-	contour bootstrap $@
+	contour bootstrap --xds-address $(LOCALIP) --xds-port=8001 $@
 
 local: $(LOCAL_BOOTSTRAP_CONFIG)
 	docker run \
 		-it \
 		--mount type=bind,source=$(CURDIR),target=/config \
-		-p 9001:9001 \
-		-p 8002:8002 \
-		docker.io/envoyproxy/envoy-alpine:v1.9.1 \
+		--net bridge \
+		docker.io/envoyproxy/envoy:v1.10.0 \
 		envoy \
 		--config-path /config/$< \
 		--service-node node0 \
@@ -77,19 +80,19 @@ ineffassign:
 	go install github.com/gordonklaus/ineffassign
 	find $(SRCDIRS) -name '*.go' | xargs ineffassign
 
-pedantic: check unparam errcheck
+pedantic: check errcheck
 
 unparam:
 	go install mvdan.cc/unparam
-	unparam ./...
+	unparam -exported $(PKGS)
 
 errcheck:
 	go install github.com/kisielk/errcheck
 	errcheck $(PKGS)
 
 render:
-	@echo Rendering deployment files...
-	@(cd deployment && bash render.sh)
+	@echo Rendering example deployment files...
+	@(cd examples && bash render.sh)
 
 updategenerated:
 	@echo Updating CRD generated code...

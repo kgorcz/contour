@@ -14,8 +14,8 @@ In either case, a Service of `type: LoadBalancer` is set up to forward to the Co
 ## Install
 
 - Clone or fork the repository.
-- To install the DaemonSet, navigate to the `deployment/ds-grpc-v2` directory. OR
-- To install the Deployment, navigate to the `deployment/deployment-grpc-v2`.
+- To install the DaemonSet, navigate to the `examples/ds-grpc-v2` directory. OR
+- To install the Deployment, navigate to the `examples/deployment-grpc-v2`.
 
 Then run:
 
@@ -53,13 +53,23 @@ Depending on your cloud provider, the `EXTERNAL-IP` value is an IP address, or, 
 
 Note that if you are running an Elastic Load Balancer (ELB) on AWS, you must add more details to your configuration to get the remote address of your incoming connections. See [Recovering the remote IP address with an ELB](tls.md/#recovering-the-remote-IP-address-with-an-ELB).
 
+### Minikube
+
 On Minikube, to get the IP address of the Contour service run:
 
 ```
 minikube service -n heptio-contour contour --url
 ```
 
-The response is always an IP address, for example `http://192.168.99.100:30588`.
+The response is always an IP address, for example `http://192.168.99.100:30588`. This is used as CONTOUR_IP in the rest of the documentation.
+
+### kind
+On kind, you will need to port-forward to the exposed Envoy port on one of the contour pods, like so:
+
+```
+kubectl port-forward -n heptio-contour $(kubectl get pod -n heptio-contour -l app=contour -o name | head -n1) 8080:8080
+```
+Then, your CONTOUR_IP (as used below) will just be `localhost:8080`.
 
 ## Test with Ingress
 
@@ -67,7 +77,7 @@ The Contour repository contains an example deployment of the Kubernetes Up and R
 To test your Contour deployment, deploy `kuard` with the following command:
 
 ```
-kubectl apply -f deployment/example-workload/kuard.yaml
+kubectl apply -f examples/example-workload/kuard.yaml
 ```
 
 Then monitor the progress of the deployment with:
@@ -100,7 +110,7 @@ In your browser, navigate your browser to the IP or DNS address of the Contour S
 To test your Contour deployment with [IngressRoutes][4], run the following command:
 
 ```sh
-kubectl apply -f deployment/example-workload/kuard-ingressroute.yaml
+kubectl apply -f examples/example-workload/kuard-ingressroute.yaml
 ```
 
 Then monitor the progress of the deployment with:
@@ -136,6 +146,10 @@ curl -H 'Host: kuard.local' ${CONTOUR_IP}
 
 If you can't or don't want to use a Service of `type: LoadBalancer` there are two alternate ways to run Contour.
 
+### Local development
+
+As mentioned above, when you are doing local development, you can run a local cluster with [minikube](https://kubernetes.io/docs/setup/minikube/) or [kind](https://github.com/kubernetes-sigs/kind). Follow the instructions under [Get your hostname or IP address][5] to get access, then use your user agent of choice.
+
 ### NodePort Service
 
 If your cluster doesn't have the capability to configure a Kubernetes LoadBalancer, or if you want to configure the load balancer outside Kubernetes, you can change the `02-service.yaml` file to set `type` to `NodePort`.  This will have every node in your cluster listen on the resultant port and forward traffic to Contour.  That port can be discovered by taking the second number listed in the `PORT` column when listing the service, for example `30274` in `80:30274/TCP`.
@@ -170,3 +184,4 @@ To remove Contour from your cluster, delete the namespace:
 [2]: https://github.com/kubernetes-up-and-running/kuard
 [3]: deploy-aws-nlb.md
 [4]: ingressroute.md
+[5]: #get-your-hostname-or-ip-address

@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2"
+	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	envoy_cluster "github.com/envoyproxy/go-control-plane/envoy/api/v2/cluster"
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type"
@@ -25,7 +25,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
 	"github.com/heptio/contour/internal/dag"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
@@ -37,6 +37,22 @@ func TestCluster(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:       "http",
+				Protocol:   "TCP",
+				Port:       443,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	}
+
+	s2 := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			ExternalName: "foo.io",
 			Ports: []v1.ServicePort{{
 				Name:       "http",
 				Protocol:   "TCP",
@@ -109,6 +125,22 @@ func TestCluster(t *testing.T) {
 				LbPolicy:             v2.Cluster_ROUND_ROBIN,
 				TlsContext:           UpstreamTLSContext(nil, "", "h2"),
 				Http2ProtocolOptions: &core.Http2ProtocolOptions{},
+				CommonLbConfig:       ClusterCommonLBConfig(),
+			},
+		},
+		"externalName service": {
+			cluster: &dag.Cluster{
+				Upstream: &dag.HTTPService{
+					TCPService: *externalnameservice(s2),
+				},
+			},
+			want: &v2.Cluster{
+				Name:                 "default/kuard/443/da39a3ee5e",
+				AltStatName:          "default_kuard_443",
+				ClusterDiscoveryType: ClusterDiscoveryType(v2.Cluster_STRICT_DNS),
+				LoadAssignment:       StaticClusterLoadAssignment(externalnameservice(s2)),
+				ConnectTimeout:       250 * time.Millisecond,
+				LbPolicy:             v2.Cluster_ROUND_ROBIN,
 				CommonLbConfig:       ClusterCommonLBConfig(),
 			},
 		},
@@ -280,6 +312,47 @@ func TestCluster(t *testing.T) {
 				CommonLbConfig: ClusterCommonLBConfig(),
 			},
 		},
+		"cluster with random load balancer policy": {
+			cluster: &dag.Cluster{
+				Upstream: &dag.HTTPService{
+					TCPService: service(s1),
+				},
+				LoadBalancerStrategy: "Random",
+			},
+			want: &v2.Cluster{
+				Name:                 "default/kuard/443/58d888c08a",
+				AltStatName:          "default_kuard_443",
+				ClusterDiscoveryType: ClusterDiscoveryType(v2.Cluster_EDS),
+				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
+					EdsConfig:   ConfigSource("contour"),
+					ServiceName: "default/kuard/http",
+				},
+				ConnectTimeout: 250 * time.Millisecond,
+				LbPolicy:       v2.Cluster_RANDOM,
+				CommonLbConfig: ClusterCommonLBConfig(),
+			},
+		},
+		"cluster with cookie policy": {
+			cluster: &dag.Cluster{
+				Upstream: &dag.HTTPService{
+					TCPService: service(s1),
+				},
+				LoadBalancerStrategy: "Cookie",
+			},
+			want: &v2.Cluster{
+				Name:                 "default/kuard/443/e4f81994fe",
+				AltStatName:          "default_kuard_443",
+				ClusterDiscoveryType: ClusterDiscoveryType(v2.Cluster_EDS),
+				EdsClusterConfig: &v2.Cluster_EdsClusterConfig{
+					EdsConfig:   ConfigSource("contour"),
+					ServiceName: "default/kuard/http",
+				},
+				ConnectTimeout: 250 * time.Millisecond,
+				LbPolicy:       v2.Cluster_RING_HASH,
+				CommonLbConfig: ClusterCommonLBConfig(),
+			},
+		},
+
 		"tcp service": {
 			cluster: &dag.Cluster{
 				Upstream: &dag.TCPService{
@@ -305,9 +378,9 @@ func TestCluster(t *testing.T) {
 				Upstream: &dag.TCPService{
 					Name: s1.Name, Namespace: s1.Namespace,
 					ServicePort: &s1.Spec.Ports[0],
-					HealthCheck: &ingressroutev1.HealthCheck{
-						Path: "/healthz",
-					},
+				},
+				HealthCheck: &ingressroutev1.HealthCheck{
+					Path: "/healthz",
 				},
 			},
 			want: &v2.Cluster{
@@ -396,17 +469,17 @@ func TestClustername(t *testing.T) {
 						Port:       80,
 						TargetPort: intstr.FromInt(6502),
 					},
-					LoadBalancerStrategy: "Maglev",
-					HealthCheck: &ingressroutev1.HealthCheck{
-						Path:                    "/healthz",
-						IntervalSeconds:         5,
-						TimeoutSeconds:          30,
-						UnhealthyThresholdCount: 3,
-						HealthyThresholdCount:   1,
-					},
+				},
+				LoadBalancerStrategy: "Random",
+				HealthCheck: &ingressroutev1.HealthCheck{
+					Path:                    "/healthz",
+					IntervalSeconds:         5,
+					TimeoutSeconds:          30,
+					UnhealthyThresholdCount: 3,
+					HealthyThresholdCount:   1,
 				},
 			},
-			want: "default/backend/80/32737eb011",
+			want: "default/backend/80/5c26077e1d",
 		},
 		"upstream tls validation with subject alt name": {
 			cluster: &dag.Cluster{
@@ -419,8 +492,8 @@ func TestClustername(t *testing.T) {
 						Port:       80,
 						TargetPort: intstr.FromInt(6502),
 					},
-					LoadBalancerStrategy: "Maglev",
 				},
+				LoadBalancerStrategy: "Random",
 				UpstreamValidation: &dag.UpstreamValidation{
 					CACertificate: &dag.Secret{
 						Object: &v1.Secret{
@@ -436,7 +509,7 @@ func TestClustername(t *testing.T) {
 					SubjectName: "foo.com",
 				},
 			},
-			want: "default/backend/80/a18ebaa0d6",
+			want: "default/backend/80/6bf46b7b3a",
 		},
 	}
 
@@ -453,11 +526,15 @@ func TestClustername(t *testing.T) {
 func TestLBPolicy(t *testing.T) {
 	tests := map[string]v2.Cluster_LbPolicy{
 		"WeightedLeastRequest": v2.Cluster_LEAST_REQUEST,
-		"RingHash":             v2.Cluster_RING_HASH,
-		"Maglev":               v2.Cluster_MAGLEV,
 		"Random":               v2.Cluster_RANDOM,
 		"":                     v2.Cluster_ROUND_ROBIN,
 		"unknown":              v2.Cluster_ROUND_ROBIN,
+		"Cookie":               v2.Cluster_RING_HASH,
+
+		// RingHash and Maglev were removed as options in 0.13.
+		// See #1150
+		"RingHash": v2.Cluster_ROUND_ROBIN,
+		"Maglev":   v2.Cluster_ROUND_ROBIN,
 	}
 
 	for strategy, want := range tests {
@@ -571,6 +648,14 @@ func service(s *v1.Service) dag.TCPService {
 		Name:        s.Name,
 		Namespace:   s.Namespace,
 		ServicePort: &s.Spec.Ports[0],
+	}
+}
+func externalnameservice(s *v1.Service) *dag.TCPService {
+	return &dag.TCPService{
+		Name:         s.Name,
+		Namespace:    s.Namespace,
+		ServicePort:  &s.Spec.Ports[0],
+		ExternalName: s.Spec.ExternalName,
 	}
 }
 

@@ -21,9 +21,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2"
+	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	envoy_cluster "github.com/envoyproxy/go-control-plane/envoy/api/v2/cluster"
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
+	endpoint "github.com/envoyproxy/go-control-plane/envoy/api/v2/endpoint"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type"
 	"github.com/gogo/protobuf/types"
 	"github.com/heptio/contour/internal/dag"
@@ -78,18 +79,27 @@ func upstreamValidationSubjectAltName(c *dag.Cluster) string {
 
 func cluster(cluster *dag.Cluster, service *dag.TCPService) *v2.Cluster {
 	c := &v2.Cluster{
-		Name:                 Clustername(cluster),
-		AltStatName:          altStatName(service),
-		ClusterDiscoveryType: ClusterDiscoveryType(v2.Cluster_EDS),
-		EdsClusterConfig:     edsconfig("contour", service),
-		ConnectTimeout:       250 * time.Millisecond,
-		LbPolicy:             lbPolicy(service.LoadBalancerStrategy),
-		CommonLbConfig:       ClusterCommonLBConfig(),
-		HealthChecks:         edshealthcheck(service),
+		Name:           Clustername(cluster),
+		AltStatName:    altStatName(service),
+		ConnectTimeout: 250 * time.Millisecond,
+		LbPolicy:       lbPolicy(cluster.LoadBalancerStrategy),
+		CommonLbConfig: ClusterCommonLBConfig(),
+		HealthChecks:   edshealthcheck(cluster),
+	}
+
+	switch len(service.ExternalName) {
+	case 0:
+		// external name not set, cluster will be discovered via EDS
+		c.ClusterDiscoveryType = ClusterDiscoveryType(v2.Cluster_EDS)
+		c.EdsClusterConfig = edsconfig("contour", service)
+	default:
+		// external name set, use hard coded DNS name
+		c.ClusterDiscoveryType = ClusterDiscoveryType(v2.Cluster_STRICT_DNS)
+		c.LoadAssignment = StaticClusterLoadAssignment(service)
 	}
 
 	// Drain connections immediately if using healthchecks and the endpoint is known to be removed
-	if service.HealthCheck != nil {
+	if cluster.HealthCheck != nil {
 		c.DrainConnectionsOnHostRemoval = true
 	}
 
@@ -104,6 +114,37 @@ func cluster(cluster *dag.Cluster, service *dag.TCPService) *v2.Cluster {
 		}
 	}
 	return c
+}
+
+// StaticClusterLoadAssignment creates a *v2.ClusterLoadAssignment pointing to the external DNS address of the service
+func StaticClusterLoadAssignment(service *dag.TCPService) *v2.ClusterLoadAssignment {
+	name := []string{
+		service.Namespace,
+		service.Name,
+		service.ServicePort.Name,
+	}
+
+	return &v2.ClusterLoadAssignment{
+		ClusterName: strings.Join(name, "/"),
+		Endpoints: []endpoint.LocalityLbEndpoints{{
+			LbEndpoints: []endpoint.LbEndpoint{{
+				HostIdentifier: &endpoint.LbEndpoint_Endpoint{
+					Endpoint: &endpoint.Endpoint{
+						Address: &core.Address{
+							Address: &core.Address_SocketAddress{
+								SocketAddress: &core.SocketAddress{
+									Address: service.ExternalName,
+									PortSpecifier: &core.SocketAddress_PortValue{
+										PortValue: uint32(service.ServicePort.Port),
+									},
+								},
+							},
+						},
+					},
+				},
+			}},
+		}},
+	}
 }
 
 func edsconfig(cluster string, service *dag.TCPService) *v2.Cluster_EdsClusterConfig {
@@ -125,23 +166,21 @@ func lbPolicy(strategy string) v2.Cluster_LbPolicy {
 	switch strategy {
 	case "WeightedLeastRequest":
 		return v2.Cluster_LEAST_REQUEST
-	case "RingHash":
-		return v2.Cluster_RING_HASH
-	case "Maglev":
-		return v2.Cluster_MAGLEV
 	case "Random":
 		return v2.Cluster_RANDOM
+	case "Cookie":
+		return v2.Cluster_RING_HASH
 	default:
 		return v2.Cluster_ROUND_ROBIN
 	}
 }
 
-func edshealthcheck(s *dag.TCPService) []*core.HealthCheck {
-	if s.HealthCheck == nil {
+func edshealthcheck(c *dag.Cluster) []*core.HealthCheck {
+	if c.HealthCheck == nil {
 		return nil
 	}
 	return []*core.HealthCheck{
-		healthCheck(s),
+		healthCheck(c),
 	}
 }
 
@@ -156,8 +195,8 @@ func Clustername(cluster *dag.Cluster) string {
 	default:
 		panic(fmt.Sprintf("unsupported upstream type: %T", s))
 	}
-	buf := service.LoadBalancerStrategy
-	if hc := service.HealthCheck; hc != nil {
+	buf := cluster.LoadBalancerStrategy
+	if hc := cluster.HealthCheck; hc != nil {
 		if hc.TimeoutSeconds > 0 {
 			buf += (time.Duration(hc.TimeoutSeconds) * time.Second).String()
 		}
@@ -261,6 +300,7 @@ func u32nil(val int) *types.UInt32Value {
 	}
 }
 
+// ClusterCommonLBConfig creates a *v2.Cluster_CommonLbConfig with HealthyPanicThreshold disabled.
 func ClusterCommonLBConfig() *v2.Cluster_CommonLbConfig {
 	return &v2.Cluster_CommonLbConfig{
 		HealthyPanicThreshold: &envoy_type.Percent{ // Disable HealthyPanicThreshold
@@ -287,6 +327,7 @@ func ConfigSource(cluster string) *core.ConfigSource {
 	}
 }
 
+// ClusterDiscoveryType returns the type of a ClusterDiscovery as a Cluster_type.
 func ClusterDiscoveryType(t v2.Cluster_DiscoveryType) *v2.Cluster_Type {
 	return &v2.Cluster_Type{Type: t}
 }

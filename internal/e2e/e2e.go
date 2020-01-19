@@ -15,11 +15,13 @@
 package e2e
 
 import (
+	"context"
 	"net"
 	"testing"
 
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2"
-	accesslog "github.com/envoyproxy/go-control-plane/envoy/config/accesslog/v2"
+	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
+	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v2"
+	envoy "github.com/envoyproxy/go-control-plane/pkg/cache"
 	"github.com/gogo/protobuf/proto"
 	"github.com/gogo/protobuf/types"
 	"github.com/heptio/contour/apis/generated/clientset/versioned/fake"
@@ -30,17 +32,18 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
 )
 
 const (
-	googleApis   = "type.googleapis.com/"
-	typePrefix   = googleApis + "envoy.api.v2."
-	endpointType = typePrefix + "ClusterLoadAssignment"
-	clusterType  = typePrefix + "Cluster"
-	routeType    = typePrefix + "RouteConfiguration"
-	listenerType = typePrefix + "Listener"
+	endpointType = envoy.EndpointType
+	clusterType  = envoy.ClusterType
+	routeType    = envoy.RouteType
+	listenerType = envoy.ListenerType
+	secretType   = envoy.SecretType
+	statsAddress = "0.0.0.0"
+	statsPort    = 8002
 )
 
 type testWriter struct {
@@ -72,7 +75,9 @@ func setup(t *testing.T, opts ...func(*contour.ResourceEventHandler)) (cache.Res
 		IngressRouteStatus: &k8s.IngressRouteStatus{
 			Client: fake.NewSimpleClientset(),
 		},
-		Metrics: metrics.NewMetrics(r),
+		Metrics:       metrics.NewMetrics(r),
+		ListenerCache: contour.NewListenerCache(statsAddress, statsPort),
+		FieldLogger:   log,
 	}
 
 	reh := contour.ResourceEventHandler{
@@ -94,6 +99,7 @@ func setup(t *testing.T, opts ...func(*contour.ResourceEventHandler)) (cache.Res
 		ch.ClusterCache.TypeURL():  &ch.ClusterCache,
 		ch.RouteCache.TypeURL():    &ch.RouteCache,
 		ch.ListenerCache.TypeURL(): &ch.ListenerCache,
+		ch.SecretCache.TypeURL():   &ch.SecretCache,
 		et.TypeURL():               et,
 	})
 
@@ -182,6 +188,58 @@ func stream(t *testing.T, st grpcStream, req *v2.DiscoveryRequest) *v2.Discovery
 	return resp
 }
 
+type Contour struct {
+	*grpc.ClientConn
+	*testing.T
+}
+
+func (c *Contour) Request(typeurl string, names ...string) *Response {
+	c.Helper()
+	var st grpcStream
+	ctx := context.Background()
+	switch typeurl {
+	case secretType:
+		sds := discovery.NewSecretDiscoveryServiceClient(c.ClientConn)
+		sts, err := sds.StreamSecrets(ctx)
+		c.check(err)
+		st = sts
+	default:
+		c.Fatal("unknown typeURL: " + typeurl)
+	}
+	resp := c.sendRequest(st, &v2.DiscoveryRequest{
+		TypeUrl:       typeurl,
+		ResourceNames: names,
+	})
+	return &Response{
+		Contour:           c,
+		DiscoveryResponse: resp,
+	}
+}
+
+func (c *Contour) sendRequest(stream grpcStream, req *v2.DiscoveryRequest) *v2.DiscoveryResponse {
+	err := stream.Send(req)
+	c.check(err)
+	resp, err := stream.Recv()
+	c.check(err)
+	return resp
+}
+
+func (c *Contour) check(err error) {
+	if err != nil {
+		c.Fatal(err)
+	}
+}
+
+type Response struct {
+	*Contour
+	*v2.DiscoveryResponse
+}
+
+func (r *Response) Equals(want *v2.DiscoveryResponse) {
+	r.Helper()
+	assertEqual(r.T, want, r.DiscoveryResponse)
+}
+
 func assertEqual(t *testing.T, want, got *v2.DiscoveryResponse) {
 	t.Helper()
 	m := proto.TextMarshaler{Compact: true, ExpandAny: true}
@@ -193,17 +251,6 @@ func assertEqual(t *testing.T, want, got *v2.DiscoveryResponse) {
 			ExpandAny: true,
 		}
 		t.Fatalf("\nexpected:\n%v\ngot:\n%v", m.Text(want), m.Text(got))
-	}
-}
-
-// fileAccessLog is defined here to avoid the conflict between the package that defines the
-// accesslog.AccessLog interface, "github.com/envoyproxy/go-control-plane/envoy/config/filter/accesslog/v2"
-// and the package the defines the FileAccessLog implement,
-// "github.com/envoyproxy/go-control-plane/envoy/config/accesslog/v2"
-
-func fileAccessLog(path string) *accesslog.FileAccessLog {
-	return &accesslog.FileAccessLog{
-		Path: path,
 	}
 }
 

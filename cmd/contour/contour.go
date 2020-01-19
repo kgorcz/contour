@@ -33,7 +33,7 @@ import (
 	"github.com/heptio/contour/internal/httpsvc"
 	"github.com/heptio/contour/internal/k8s"
 	"github.com/heptio/contour/internal/metrics"
-	"github.com/kkkmmu/workgroup"
+	"github.com/heptio/contour/internal/workgroup"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
@@ -53,13 +53,8 @@ func main() {
 	path := bootstrap.Arg("path", "Configuration file.").Required().String()
 	bootstrap.Flag("admin-address", "Envoy admin interface address").StringVar(&config.AdminAddress)
 	bootstrap.Flag("admin-port", "Envoy admin interface port").IntVar(&config.AdminPort)
-	bootstrap.Flag("stats-address", "Envoy /stats interface address").StringVar(&config.StatsAddress)
-	bootstrap.Flag("stats-port", "Envoy /stats interface port").IntVar(&config.StatsPort)
 	bootstrap.Flag("xds-address", "xDS gRPC API address").StringVar(&config.XDSAddress)
 	bootstrap.Flag("xds-port", "xDS gRPC API port").IntVar(&config.XDSGRPCPort)
-	bootstrap.Flag("statsd-enabled", "enable statsd output").BoolVar(&config.StatsdEnabled)
-	bootstrap.Flag("statsd-address", "statsd address").StringVar(&config.StatsdAddress)
-	bootstrap.Flag("statsd-port", "statsd port").IntVar(&config.StatsdPort)
 
 	// Get the running namespace passed via ENV var from the Kubernetes Downward API
 	config.Namespace = getEnv("CONTOUR_NAMESPACE", "heptio-contour")
@@ -85,6 +80,8 @@ func main() {
 	kubeconfig := serve.Flag("kubeconfig", "path to kubeconfig (if not in running inside a cluster)").Default(filepath.Join(os.Getenv("HOME"), ".kube", "config")).String()
 	xdsAddr := serve.Flag("xds-address", "xDS gRPC API address").Default("127.0.0.1").String()
 	xdsPort := serve.Flag("xds-port", "xDS gRPC API port").Default("8001").Int()
+	statsAddress := serve.Flag("stats-address", "Envoy /stats interface address").Default("0.0.0.0").String()
+	statsPort := serve.Flag("stats-port", "Envoy /stats interface port").Default("8002").Int()
 
 	ch := contour.CacheHandler{
 		FieldLogger: log.WithField("context", "CacheHandler"),
@@ -133,8 +130,6 @@ func main() {
 
 	serve.Flag("envoy-http-access-log", "Envoy HTTP access log").Default(contour.DEFAULT_HTTP_ACCESS_LOG).StringVar(&ch.HTTPAccessLog)
 	serve.Flag("envoy-https-access-log", "Envoy HTTPS access log").Default(contour.DEFAULT_HTTPS_ACCESS_LOG).StringVar(&ch.HTTPSAccessLog)
-	serve.Flag("envoy-external-http-port", "External port for HTTP requests").Default("80").IntVar(&reh.ExternalInsecurePort)
-	serve.Flag("envoy-external-https-port", "External port for HTTPS requests").Default("443").IntVar(&reh.ExternalSecurePort)
 	serve.Flag("envoy-service-http-address", "Kubernetes Service address for HTTP requests").Default("0.0.0.0").StringVar(&ch.HTTPAddress)
 	serve.Flag("envoy-service-https-address", "Kubernetes Service address for HTTPS requests").Default("0.0.0.0").StringVar(&ch.HTTPSAddress)
 	serve.Flag("envoy-service-http-port", "Kubernetes Service port for HTTP requests").Default("8080").IntVar(&ch.HTTPPort)
@@ -142,6 +137,14 @@ func main() {
 	serve.Flag("use-proxy-protocol", "Use PROXY protocol for all listeners").BoolVar(&ch.UseProxyProto)
 	serve.Flag("ingress-class-name", "Contour IngressClass name").StringVar(&reh.IngressClass)
 	serve.Flag("ingressroute-root-namespaces", "Restrict contour to searching these namespaces for root ingress routes").StringVar(&ingressrouteRootNamespaceFlag)
+
+	// TODO(youngnick) remove these for 0.14, see #1141
+	// The following flags are no-ops, and the variables are used to print a message that they don't do anything
+	// any more.
+	var externalHTTPPort int
+	var externalHTTPSPort int
+	serve.Flag("envoy-external-http-port", "External port for HTTP requests").IntVar(&externalHTTPPort)
+	serve.Flag("envoy-external-https-port", "External port for HTTPS requests").IntVar(&externalHTTPSPort)
 
 	args := os.Args[1:]
 	switch kingpin.MustParse(app.Parse(args)) {
@@ -166,6 +169,14 @@ func main() {
 		log.Infof("args: %v", args)
 		var g workgroup.Group
 
+		// Deprecation warnings for deprecated flags.
+		if externalHTTPPort != 0 {
+			log.Warn("--envoy-external-http-port will be removed in 0.14")
+		}
+		if externalHTTPSPort != 0 {
+			log.Warn("--envoy-external-https-port will be removed in 0.14")
+		}
+
 		// client-go uses glog which requires initialisation as a side effect of calling
 		// flag.Parse (see #118 and https://github.com/golang/glog/blob/master/glog.go#L679)
 		// However kingpin owns our flag parsing, so we defer calling flag.Parse until
@@ -178,9 +189,11 @@ func main() {
 		// container environment. See #959
 		_ = flag.Lookup("logtostderr").Value.Set("true")
 
+		ch.ListenerCache = contour.NewListenerCache(*statsAddress, *statsPort)
 		reh.IngressRouteRootNamespaces = parseRootNamespaces(ingressrouteRootNamespaceFlag)
 
 		client, contourClient := newClient(*kubeconfig, *inCluster)
+		metricsvc.Client = client
 
 		// resync timer disabled for Contour
 		coreInformers := coreinformers.NewSharedInformerFactory(client, 0)

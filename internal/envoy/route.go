@@ -13,10 +13,10 @@
 package envoy
 
 import (
-	"fmt"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
 	"sort"
 	"time"
+
+	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
 
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/route"
 	"github.com/gogo/protobuf/types"
@@ -26,11 +26,12 @@ import (
 // RouteRoute creates a route.Route_Route for the services supplied.
 // If len(services) is greater than one, the route's action will be a
 // weighted cluster.
-func RouteRoute(r *dag.Route, clusters []*dag.Cluster) *route.Route_Route {
+func RouteRoute(r *dag.Route) *route.Route_Route {
 	ra := route.RouteAction{
 		RetryPolicy:   retryPolicy(r),
 		Timeout:       timeout(r),
 		PrefixRewrite: r.PrefixRewrite,
+		HashPolicy:    hashPolicy(r),
 	}
 
 	if r.Websocket {
@@ -41,19 +42,38 @@ func RouteRoute(r *dag.Route, clusters []*dag.Cluster) *route.Route_Route {
 		)
 	}
 
-	switch len(clusters) {
+	switch len(r.Clusters) {
 	case 1:
 		ra.ClusterSpecifier = &route.RouteAction_Cluster{
-			Cluster: Clustername(clusters[0]),
+			Cluster: Clustername(r.Clusters[0]),
 		}
 	default:
 		ra.ClusterSpecifier = &route.RouteAction_WeightedClusters{
-			WeightedClusters: weightedClusters(clusters),
+			WeightedClusters: weightedClusters(r.Clusters),
 		}
 	}
 	return &route.Route_Route{
 		Route: &ra,
 	}
+}
+
+// hashPolicy returns a slice of hash policies iff at least one of the route's
+// clusters supplied uses the `Cookie` load balancing stategy.
+func hashPolicy(r *dag.Route) []*route.RouteAction_HashPolicy {
+	for _, c := range r.Clusters {
+		if c.LoadBalancerStrategy == "Cookie" {
+			return []*route.RouteAction_HashPolicy{{
+				PolicySpecifier: &route.RouteAction_HashPolicy_Cookie_{
+					Cookie: &route.RouteAction_HashPolicy_Cookie{
+						Name: "X-Contour-Session-Affinity",
+						Ttl:  duration(0),
+						Path: "/",
+					},
+				},
+			}}
+		}
+	}
+	return nil
 }
 
 func timeout(r *dag.Route) *time.Duration {
@@ -147,10 +167,10 @@ func PrefixMatch(prefix string) route.RouteMatch {
 }
 
 // VirtualHost creates a new route.VirtualHost.
-func VirtualHost(hostname string, port int) route.VirtualHost {
+func VirtualHost(hostname string) route.VirtualHost {
 	domains := []string{hostname}
 	if hostname != "*" {
-		domains = append(domains, fmt.Sprintf("%s:%d", hostname, port))
+		domains = append(domains, hostname+":*")
 	}
 	return route.VirtualHost{
 		Name:    hashname(60, hostname),

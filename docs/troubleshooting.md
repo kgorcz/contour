@@ -20,7 +20,7 @@ Getting access to the Envoy admin interface can be useful for diagnosing issues 
 The Envoy admin interface is bound by default to `http://127.0.0.1:9001`. 
 To access it from your workstation use `kubectl port-forward` like so,
 ```
-# Get one of the pods that matches the deployment/daemonset
+# Get one of the pods that matches the examples/daemonset
 CONTOUR_POD=$(kubectl -n heptio-contour get pod -l app=contour -o jsonpath='{.items[0].metadata.name}')
 # Do the port forward to that pod
 kubectl -n heptio-contour port-forward $CONTOUR_POD 9001
@@ -33,7 +33,7 @@ Contour exposes the [net/http/pprof][5] handlers for `go tool pprof` and `go too
 This service is useful for profiling Contour. 
 To access it from your workstation use `kubectl port-forward` like so,
 ```
-# Get one of the pods that matches the deployment/daemonset
+# Get one of the pods that matches the examples/daemonset
 CONTOUR_POD=$(kubectl -n heptio-contour get pod -l app=contour -o jsonpath='{.items[0].metadata.name}')
 # Do the port forward to that pod
 kubectl -n heptio-contour port-forward $CONTOUR_POD 6060
@@ -68,7 +68,7 @@ Contour ships with a `contour cli` subcommand which can be used for this purpose
 Because Contour runs as a sidecar with Envoy, you must run `contour cli` commands _inside_ the pod.
 The easiest way do this is via `kubectl exec`
 ```
-# Get one of the pods that matches the deployment/daemonset
+# Get one of the pods that matches the examples/daemonset
 CONTOUR_POD=$(kubectl -n heptio-contour get pod -l app=contour -o jsonpath='{.items[0].metadata.name}')
 # Do the port forward to that pod
 kubectl -n heptio-contour exec $CONTOUR_POD -c contour contour cli lds
@@ -76,10 +76,9 @@ kubectl -n heptio-contour exec $CONTOUR_POD -c contour contour cli lds
 Which will stream changes to the LDS api endpoint to your terminal.
 Replace `contour cli lds` with `contour cli rds` for RDS, `contour cli cds` for CDS, and `contour cli eds` for EDS.
 
-## I've deployed on Minikube and nothing seems to work
+## I've deployed on Minikube or kind and nothing seems to work
 
-Minikube is not recommended for testing or developing Contour because of its network limitations.
-To run Contour on Minikube for exploration only, see [Contour on Minikube][3]
+See [the deployment documentation][3] for some tips on using these two deployment options successfully.
 
 ## How can I deploy a Contour daemonset directly onto ports 80 or 443?
 
@@ -102,7 +101,7 @@ See [Issue #547][4]
 [0]: https://github.com/jetstack/kube-lego
 [1]: https://github.com/heptio/contour/issues/210
 [2]: https://github.com/envoyproxy/envoy/issues/1269
-[3]: minikube.md
+[3]: deploy-options.md
 [4]: https://github.com/heptio/contour/issues/547
 [5]: https://golang.org/pkg/net/http/pprof/
 [6]: https://en.wikipedia.org/wiki/DOT_(graph_description_language)

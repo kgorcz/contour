@@ -118,7 +118,7 @@ ingressroute "basic" deleted
 
 ## IngressRoute API Specification
 
-There are a number of [working examples](https://github.com/heptio/contour/tree/master/deployment/example-workload/ingressroute) of IngressRoute objects in the `deployment/example-workload` directory.
+There are a number of [working examples](https://github.com/heptio/contour/tree/master/examples/example-workload/ingressroute) of IngressRoute objects in the `examples/example-workload` directory.
 We will use these examples as a mechanism to describe IngressRoute API functionality.
 
 ### Virtual Host Configuration
@@ -267,10 +267,10 @@ spec:
         - name: s1
           port: 80
     - match: /blog
+      permitInsecure: true
       services: 
         - name: s2
           port: 80
-          permitInsecure: true
 ```
 
 #### Upstream TLS
@@ -489,8 +489,6 @@ The following list are the options available to choose from:
 
 - `RoundRobin`: Each healthy upstream Endpoint is selected in round robin order (Default strategy if none selected).
 - `WeightedLeastRequest`: The least request strategy uses an O(1) algorithm which selects two random healthy Endpoints and picks the Endpoint which has fewer active requests. Note: This algorithm is simple and sufficient for load testing. It should not be used where true weighted least request behavior is desired.
-- `RingHash`: The ring/modulo hash load balancer implements consistent hashing to upstream Endpoints.
-- `Maglev`: The Maglev strategy implements consistent hashing to upstream Endpoints
 - `Random`: The random strategy selects a random healthy Endpoints.
 
 More information on the load balancing strategy can be found in [Envoy's documentation](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/load_balancing.html).
@@ -517,37 +515,34 @@ spec:
           port: 80
           strategy: WeightedLeastRequest
 ```
+#### Session Affinity
 
-#### IngressRoute Default Load Balancing Strategy (Not supported in beta.1)
-
-In order to reduce the amount of duplicated configuration, the IngressRoute specification supports a default Strategy that will be applied to all Services.
-You may still override this default on a per-Service basis.
-
-In this example, Services `s1-def-strategy` and `s2-def-strategy` will both have requests distributed across their Endpoints using the WeightedLeastRequest strategy.
-Service `s3-def-strategy` will have requests distributed randomly.
+Session affinity, also known as _sticky sessions_, is a load balancing strategy whereby a sequence of requests from a single client are consitently routed to the same application backend.
+Contour supports session affinity with the `strategy: Cookie` key on a per service basis.
 
 ```yaml
-# default-lb-strategy.ingressroute.yaml
 apiVersion: contour.heptio.com/v1beta1
 kind: IngressRoute
 metadata:
-  name: default-lb-strategy
+  name: httpbin
   namespace: default
 spec:
   virtualhost:
-    fqdn: default-strategy.bar.com
-  strategy: WeightedLeastRequest # Default LB algorithm to be applied to services
+    fqdn: httpbin.davecheney.com
   routes:
-    - match: /
-      services:
-        - name: s1-def-strategy
-          port: 80
-        - name: s2-def-strategy
-          port: 80
-        - name: s3-def-strategy
-          port: 80
-          strategy: Random # Overrides default LB algorithm for only this Service
+  - match: /
+    services:
+    - name: httpbin
+      port: 8080
+      strategy: Cookie
 ```
+##### Limitations
+
+Session affinity is based on the premise that the backend servers are robust, do not change ordering, or grow and shrink according to load.
+None of these properties are guaranteed by a Kubernetes cluster and will be visible to applications that rely heavily on session affinity.
+
+Any pertibation in the set of pods backing a service risks redistributing backends around the hash ring.
+This is an unavoidable consiquence of Envoy's session affinity implementation and the pods-as-cattle approach of Kubernetes.
 
 #### Per-Upstream Active Health Checking
 
@@ -691,6 +686,33 @@ spec:
       services:
         - name: s1
           port: 80
+```
+
+#### ExternalName
+
+IngressRoute supports routing traffic to service types `ExternalName`.
+Contour looks at the `spec.externalName` field of the service and configures the route to use that DNS name instead of utilizing EDS.
+
+There's nothing specific in the `IngressRoute` object that needs configured other than referencing a service of type `ExternalName`.
+
+NOTE: The ports are required to be specified.
+
+```
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    run: externaldns
+  name: externaldns
+  namespace: default
+spec:
+  externalName: foo-basic.bar.com
+  ports:
+  - name: http
+    port: 80
+    protocol: TCP
+    targetPort: 80
+  type: ExternalName
 ```
 
 ## IngressRoute Delegation

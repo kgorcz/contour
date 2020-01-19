@@ -21,7 +21,7 @@ import (
 	"strconv"
 	"strings"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/api/extensions/v1beta1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
@@ -39,17 +39,8 @@ const (
 type Builder struct {
 	KubernetesCache
 
-	// ExternalInsecurePort is the port that HTTP
-	// requests will arrive at the ELB or NAT that
-	// presents Envoy at the edge network.
-	// If not supplied, defaults to 80.
-	ExternalInsecurePort int
+	// TODO(youngnick) merge Builder and Kubernetes cache? See #1142
 
-	// ExternalSecurePort is the port that HTTPS
-	// requests will arrive at the ELB or NAT that
-	// presents Envoy at the edge network.
-	// If not supplied, defaults to 443.
-	ExternalSecurePort int
 }
 
 // Build builds a new *DAG.
@@ -73,8 +64,8 @@ type builder struct {
 }
 
 // lookupHTTPService returns a HTTPService that matches the meta and port supplied.
-func (b *builder) lookupHTTPService(m meta, port intstr.IntOrString, strategy string, hc *ingressroutev1.HealthCheck) *HTTPService {
-	s := b.lookupService(m, port, strategy, hc)
+func (b *builder) lookupHTTPService(m meta, port intstr.IntOrString) *HTTPService {
+	s := b.lookupService(m, port)
 	switch s := s.(type) {
 	case *HTTPService:
 		return s
@@ -86,10 +77,10 @@ func (b *builder) lookupHTTPService(m meta, port intstr.IntOrString, strategy st
 		for i := range svc.Spec.Ports {
 			p := &svc.Spec.Ports[i]
 			if int(p.Port) == port.IntValue() {
-				return b.addHTTPService(svc, p, strategy, hc)
+				return b.addHTTPService(svc, p)
 			}
 			if port.String() == p.Name {
-				return b.addHTTPService(svc, p, strategy, hc)
+				return b.addHTTPService(svc, p)
 			}
 		}
 		return nil
@@ -100,8 +91,8 @@ func (b *builder) lookupHTTPService(m meta, port intstr.IntOrString, strategy st
 }
 
 // lookupTCPService returns a TCPService that matches the meta and port supplied.
-func (b *builder) lookupTCPService(m meta, port intstr.IntOrString, strategy string, hc *ingressroutev1.HealthCheck) *TCPService {
-	s := b.lookupService(m, port, strategy, hc)
+func (b *builder) lookupTCPService(m meta, port intstr.IntOrString) *TCPService {
+	s := b.lookupService(m, port)
 	switch s := s.(type) {
 	case *TCPService:
 		return s
@@ -113,10 +104,10 @@ func (b *builder) lookupTCPService(m meta, port intstr.IntOrString, strategy str
 		for i := range svc.Spec.Ports {
 			p := &svc.Spec.Ports[i]
 			if int(p.Port) == port.IntValue() {
-				return b.addTCPService(svc, p, strategy, hc)
+				return b.addTCPService(svc, p)
 			}
 			if port.String() == p.Name {
-				return b.addTCPService(svc, p, strategy, hc)
+				return b.addTCPService(svc, p)
 			}
 		}
 		return nil
@@ -125,17 +116,15 @@ func (b *builder) lookupTCPService(m meta, port intstr.IntOrString, strategy str
 		return nil
 	}
 }
-func (b *builder) lookupService(m meta, port intstr.IntOrString, strategy string, hc *ingressroutev1.HealthCheck) Service {
+func (b *builder) lookupService(m meta, port intstr.IntOrString) Service {
 	if port.Type != intstr.Int {
 		// can't handle, give up
 		return nil
 	}
 	sm := servicemeta{
-		name:        m.name,
-		namespace:   m.namespace,
-		port:        int32(port.IntValue()),
-		strategy:    strategy,
-		healthcheck: healthcheckToString(hc),
+		name:      m.name,
+		namespace: m.namespace,
+		port:      int32(port.IntValue()),
 	}
 	s, ok := b.services[sm]
 	if !ok {
@@ -144,11 +133,7 @@ func (b *builder) lookupService(m meta, port intstr.IntOrString, strategy string
 	return s
 }
 
-func healthcheckToString(hc *ingressroutev1.HealthCheck) string {
-	return fmt.Sprintf("%#v", hc)
-}
-
-func (b *builder) addHTTPService(svc *v1.Service, port *v1.ServicePort, strategy string, hc *ingressroutev1.HealthCheck) *HTTPService {
+func (b *builder) addHTTPService(svc *v1.Service, port *v1.ServicePort) *HTTPService {
 	if b.services == nil {
 		b.services = make(map[servicemeta]Service)
 	}
@@ -160,16 +145,15 @@ func (b *builder) addHTTPService(svc *v1.Service, port *v1.ServicePort, strategy
 
 	s := &HTTPService{
 		TCPService: TCPService{
-			Name:                 svc.Name,
-			Namespace:            svc.Namespace,
-			ServicePort:          port,
-			LoadBalancerStrategy: strategy,
+			Name:        svc.Name,
+			Namespace:   svc.Namespace,
+			ServicePort: port,
 
 			MaxConnections:     parseAnnotation(svc.Annotations, annotationMaxConnections),
 			MaxPendingRequests: parseAnnotation(svc.Annotations, annotationMaxPendingRequests),
 			MaxRequests:        parseAnnotation(svc.Annotations, annotationMaxRequests),
 			MaxRetries:         parseAnnotation(svc.Annotations, annotationMaxRetries),
-			HealthCheck:        hc,
+			ExternalName:       externalName(svc),
 		},
 		Protocol: protocol,
 	}
@@ -177,26 +161,33 @@ func (b *builder) addHTTPService(svc *v1.Service, port *v1.ServicePort, strategy
 	return s
 }
 
-func (b *builder) addTCPService(svc *v1.Service, port *v1.ServicePort, strategy string, hc *ingressroutev1.HealthCheck) *TCPService {
+func externalName(svc *v1.Service) string {
+	if svc.Spec.Type != v1.ServiceTypeExternalName {
+		return ""
+	}
+	return svc.Spec.ExternalName
+}
+
+func (b *builder) addTCPService(svc *v1.Service, port *v1.ServicePort) *TCPService {
 	if b.services == nil {
 		b.services = make(map[servicemeta]Service)
 	}
 	s := &TCPService{
-		Name:                 svc.Name,
-		Namespace:            svc.Namespace,
-		ServicePort:          port,
-		LoadBalancerStrategy: strategy,
+		Name:        svc.Name,
+		Namespace:   svc.Namespace,
+		ServicePort: port,
 
 		MaxConnections:     parseAnnotation(svc.Annotations, annotationMaxConnections),
 		MaxPendingRequests: parseAnnotation(svc.Annotations, annotationMaxPendingRequests),
 		MaxRequests:        parseAnnotation(svc.Annotations, annotationMaxRequests),
 		MaxRetries:         parseAnnotation(svc.Annotations, annotationMaxRetries),
-		HealthCheck:        hc,
 	}
 	b.services[s.toMeta()] = s
 	return s
 }
 
+// lookupSecret returns a Secret if present or nil if the underlying kubernetes
+// secret fails validation or is missing.
 func (b *builder) lookupSecret(m meta, validate func(*v1.Secret) bool) *Secret {
 	if s, ok := b.secrets[m]; ok {
 		return s
@@ -219,7 +210,7 @@ func (b *builder) lookupSecret(m meta, validate func(*v1.Secret) bool) *Secret {
 }
 
 func (b *builder) lookupVirtualHost(name string, port int) *VirtualHost {
-	l := b.listener(b.externalInsecurePort())
+	l := b.listener(80)
 	vh, ok := l.VirtualHosts[name]
 	if !ok {
 		vh := &VirtualHost{
@@ -233,7 +224,7 @@ func (b *builder) lookupVirtualHost(name string, port int) *VirtualHost {
 }
 
 func (b *builder) lookupSecureVirtualHost(name string, port int) *SecureVirtualHost {
-	l := b.listener(b.externalSecurePort())
+	l := b.listener(443)
 	svh, ok := l.VirtualHosts[name]
 	if !ok {
 		svh := &SecureVirtualHost{
@@ -249,6 +240,10 @@ func (b *builder) lookupSecureVirtualHost(name string, port int) *SecureVirtualH
 }
 
 // listener returns a listener for the supplied port.
+// TODO: the port value is not actually used as a port
+// anywhere. It's only used to choose between
+// 80 (for insecure) or 443 (for secure). This should be
+// fixed, see https://github.com/heptio/contour/issues/1135
 func (b *builder) listener(port int) *Listener {
 	l, ok := b.listeners[port]
 	if !ok {
@@ -262,20 +257,6 @@ func (b *builder) listener(port int) *Listener {
 		b.listeners[l.Port] = l
 	}
 	return l
-}
-
-func (b *builder) externalInsecurePort() int {
-	if b.source.ExternalInsecurePort == 0 {
-		return 80
-	}
-	return b.source.ExternalInsecurePort
-}
-
-func (b *builder) externalSecurePort() int {
-	if b.source.ExternalSecurePort == 0 {
-		return 443
-	}
-	return b.source.ExternalSecurePort
 }
 
 func (b *builder) compute() *DAG {
@@ -394,7 +375,7 @@ func (b *builder) computeSecureVirtualhosts() {
 			m := splitSecret(tls.SecretName, ing.Namespace)
 			if sec := b.lookupSecret(m, validSecret); sec != nil && b.delegationPermitted(m, ing.Namespace) {
 				for _, host := range tls.Hosts {
-					svhost := b.lookupSecureVirtualHost(host, b.externalSecurePort())
+					svhost := b.lookupSecureVirtualHost(host, 443)
 					svhost.Secret = sec
 					version := ing.Annotations["contour.heptio.com/tls-minimum-protocol-version"]
 					svhost.MinProtoVersion = minProtoVersion(version)
@@ -469,17 +450,17 @@ func (b *builder) computeIngresses() {
 				r := prefixRoute(ing, prefix)
 				be := httppath.Backend
 				m := meta{name: be.ServiceName, namespace: ing.Namespace}
-				if s := b.lookupHTTPService(m, be.ServicePort, "", nil); s != nil {
-					r.addHTTPService(s, 0, nil)
+				if s := b.lookupHTTPService(m, be.ServicePort); s != nil {
+					r.Clusters = append(r.Clusters, &Cluster{Upstream: s})
 				}
 
 				// should we create port 80 routes for this ingress
-				if httpAllowed(ing) {
-					b.lookupVirtualHost(host, b.externalInsecurePort()).addRoute(r)
+				if tlsRequired(ing) || httpAllowed(ing) {
+					b.lookupVirtualHost(host, 80).addRoute(r)
 				}
 
-				if b.secureVirtualhostExists(host, b.externalSecurePort()) && host != "*" {
-					b.lookupSecureVirtualHost(host, b.externalSecurePort()).addRoute(r)
+				if b.secureVirtualhostExists(host, 443) && host != "*" {
+					b.lookupSecureVirtualHost(host, 443).addRoute(r)
 				}
 			}
 		}
@@ -517,7 +498,9 @@ func (b *builder) computeIngressRoutes() {
 		if tls := ir.Spec.VirtualHost.TLS; tls != nil {
 			// attach secrets to TLS enabled vhosts
 			m := splitSecret(tls.SecretName, ir.Namespace)
-			if sec := b.lookupSecret(m, validSecret); sec != nil && b.delegationPermitted(m, ir.Namespace) {
+			sec := b.lookupSecret(m, validSecret)
+			secretInvalidOrNotFound := sec == nil
+			if sec != nil && b.delegationPermitted(m, ir.Namespace) {
 				svhost := b.lookupSecureVirtualHost(host, ir.Spec.VirtualHost.Port)
 				svhost.Secret = sec
 				svhost.MinProtoVersion = minProtoVersion(ir.Spec.VirtualHost.TLS.MinimumProtocolVersion)
@@ -525,7 +508,12 @@ func (b *builder) computeIngressRoutes() {
 			}
 			// passthrough is true if tls.secretName is not present, and
 			// tls.passthrough is set to true.
-			passthrough = tls.SecretName == "" && tls.Passthrough
+			passthrough = isBlank(tls.SecretName) && tls.Passthrough
+
+			// If not passthrough and secret is invalid, then set status
+			if secretInvalidOrNotFound && !passthrough {
+				b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: "TLS Secret not found or is malformed"})
+			}
 		}
 
 		switch {
@@ -631,7 +619,7 @@ func (b *builder) rootAllowed(ir *ingressroutev1.IngressRoute) bool {
 
 // validSecret returns true if the Secret contains certificate and private key material.
 func validSecret(s *v1.Secret) bool {
-	return len(s.Data[v1.TLSCertKey]) > 0 && len(s.Data[v1.TLSPrivateKeyKey]) > 0
+	return s.Type == v1.SecretTypeTLS && len(s.Data[v1.TLSCertKey]) > 0 && len(s.Data[v1.TLSPrivateKeyKey]) > 0
 }
 
 func validCA(s *v1.Secret) bool {
@@ -673,18 +661,24 @@ func (b *builder) processRoutes(ir *ingressroutev1.IngressRoute, prefixMatch str
 					return
 				}
 				m := meta{name: service.Name, namespace: ir.Namespace}
-				if s := b.lookupHTTPService(m, intstr.FromInt(service.Port), service.Strategy, service.HealthCheck); s != nil {
+				if s := b.lookupHTTPService(m, intstr.FromInt(service.Port)); s != nil {
 					var uv *UpstreamValidation
 					if s.Protocol == "tls" {
 						// we can only varlidate TLS connections to services that talk TLS
 						uv = b.lookupUpstreamValidation(ir, host, route, service, ir.Namespace)
 					}
-					r.addHTTPService(s, service.Weight, uv)
+					r.Clusters = append(r.Clusters, &Cluster{
+						Upstream:             s,
+						LoadBalancerStrategy: service.Strategy,
+						Weight:               service.Weight,
+						HealthCheck:          service.HealthCheck,
+						UpstreamValidation:   uv,
+					})
 				}
 			}
 
-			b.lookupVirtualHost(host, b.externalInsecurePort()).addRoute(r)
-			b.lookupSecureVirtualHost(host, b.externalSecurePort()).addRoute(r)
+			b.lookupVirtualHost(host, 80).addRoute(r)
+			b.lookupSecureVirtualHost(host, 443).addRoute(r)
 			continue
 		}
 
@@ -768,13 +762,14 @@ func (b *builder) processTCPProxy(ir *ingressroutev1.IngressRoute, visited []*in
 		var proxy TCPProxy
 		for _, service := range tcpproxy.Services {
 			m := meta{name: service.Name, namespace: ir.Namespace}
-			s := b.lookupTCPService(m, intstr.FromInt(service.Port), service.Strategy, service.HealthCheck)
+			s := b.lookupTCPService(m, intstr.FromInt(service.Port))
 			if s == nil {
 				b.setStatus(Status{Object: ir, Status: StatusInvalid, Description: fmt.Sprintf("tcpproxy: service %s/%s/%d: not found", ir.Namespace, service.Name, service.Port), Vhost: host})
 				return
 			}
 			proxy.Clusters = append(proxy.Clusters, &Cluster{
-				Upstream: s,
+				Upstream:             s,
+				LoadBalancerStrategy: service.Strategy,
 			})
 		}
 		b.lookupSecureVirtualHost(host, ir.Spec.VirtualHost.Port).VirtualHost.TCPProxy = &proxy

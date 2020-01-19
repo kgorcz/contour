@@ -145,7 +145,7 @@ func (v *routeVisitor) visit(vertex dag.Vertex) {
 		l.Visit(func(vertex dag.Vertex) {
 			switch vh := vertex.(type) {
 			case *dag.VirtualHost:
-				vhost := envoy.VirtualHost(vh.Name, l.Port)
+				vhost := envoy.VirtualHost(vh.Name)
 				vh.Visit(func(v dag.Vertex) {
 					if r, ok := v.(*dag.Route); ok {
 						if len(r.Clusters) < 1 {
@@ -154,7 +154,7 @@ func (v *routeVisitor) visit(vertex dag.Vertex) {
 						}
 						rr := route.Route{
 							Match:               envoy.PrefixMatch(r.Prefix),
-							Action:              envoy.RouteRoute(r, r.Clusters),
+							Action:              envoy.RouteRoute(r),
 							RequestHeadersToAdd: envoy.RouteHeaders(),
 						}
 
@@ -171,7 +171,7 @@ func (v *routeVisitor) visit(vertex dag.Vertex) {
 				sort.Stable(sort.Reverse(longestRouteFirst(vhost.Routes)))
 				v.routes["ingress_http"].VirtualHosts = append(v.routes["ingress_http"].VirtualHosts, vhost)
 			case *dag.SecureVirtualHost:
-				vhost := envoy.VirtualHost(vh.VirtualHost.Name, l.Port)
+				vhost := envoy.VirtualHost(vh.VirtualHost.Name)
 				vh.Visit(func(v dag.Vertex) {
 					if r, ok := v.(*dag.Route); ok {
 						if len(r.Clusters) < 1 {
@@ -180,7 +180,7 @@ func (v *routeVisitor) visit(vertex dag.Vertex) {
 						}
 						vhost.Routes = append(vhost.Routes, route.Route{
 							Match:               envoy.PrefixMatch(r.Prefix),
-							Action:              envoy.RouteRoute(r, r.Clusters),
+							Action:              envoy.RouteRoute(r),
 							RequestHeadersToAdd: envoy.RouteHeaders(),
 						})
 					}

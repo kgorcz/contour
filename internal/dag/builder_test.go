@@ -179,6 +179,26 @@ func TestDAGInsert(t *testing.T) {
 			}},
 		},
 	}
+	i6c := &v1beta1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "two-vhosts",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"ingress.kubernetes.io/force-ssl-redirect": "true",
+				"kubernetes.io/ingress.allow-http":         "false",
+			},
+		},
+		Spec: v1beta1.IngressSpec{
+			TLS: []v1beta1.IngressTLS{{
+				Hosts:      []string{"b.example.com"},
+				SecretName: "secret",
+			}},
+			Rules: []v1beta1.IngressRule{{
+				Host:             "b.example.com",
+				IngressRuleValue: ingressrulevalue(backend("kuard", intstr.FromString("http"))),
+			}},
+		},
+	}
 
 	// i7 contains a single vhost with two paths
 	i7 := &v1beta1.Ingress{
@@ -578,6 +598,7 @@ func TestDAGInsert(t *testing.T) {
 			Name:      "example-tls",
 			Namespace: "default",
 		},
+		Type: v1.SecretTypeTLS,
 		Data: map[string][]byte{
 			v1.TLSCertKey:       []byte("certificate"),
 			v1.TLSPrivateKeyKey: []byte("key"),
@@ -723,6 +744,28 @@ func TestDAGInsert(t *testing.T) {
 					Port: 8080,
 				}},
 			},
+		},
+	}
+
+	ir1e := &ingressroutev1.IngressRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-com",
+			Namespace: "default",
+		},
+		Spec: ingressroutev1.IngressRouteSpec{
+			VirtualHost: &ingressroutev1.VirtualHost{
+				Fqdn: "example.com",
+			},
+			Routes: []ingressroutev1.Route{{
+				Match: "/",
+				Services: []ingressroutev1.Service{{
+					Name: "kuard",
+					Port: 8080,
+					HealthCheck: &ingressroutev1.HealthCheck{
+						Path: "/healthz",
+					},
+				}},
+			}},
 		},
 	}
 
@@ -1329,6 +1372,7 @@ func TestDAGInsert(t *testing.T) {
 			Name:      "secret",
 			Namespace: "default",
 		},
+		Type: v1.SecretTypeTLS,
 		Data: secretdata("certificate", "key"),
 	}
 
@@ -1338,6 +1382,7 @@ func TestDAGInsert(t *testing.T) {
 			Name:      "secret",
 			Namespace: "default",
 		},
+		Type: v1.SecretTypeTLS,
 		Data: secretdata("", ""),
 	}
 
@@ -1352,7 +1397,6 @@ func TestDAGInsert(t *testing.T) {
 	}
 
 	tests := map[string]struct {
-		*Builder
 		objs []interface{}
 		want []Vertex
 	}{
@@ -1643,29 +1687,6 @@ func TestDAGInsert(t *testing.T) {
 				},
 			),
 		},
-		"insert ingress w/ tls with different secure port": {
-			Builder: &Builder{
-				ExternalSecurePort: 8443,
-			},
-			objs: []interface{}{
-				i3,
-				sec1,
-			},
-			want: listeners(
-				&Listener{
-					Port: 80,
-					VirtualHosts: virtualhosts(
-						virtualhost("kuard.example.com", route("/")),
-					),
-				},
-				&Listener{
-					Port: 8443,
-					VirtualHosts: virtualhosts(
-						securevirtualhost("kuard.example.com", sec1, route("/")),
-					),
-				},
-			),
-		},
 		"insert ingress w/ two vhosts": {
 			objs: []interface{}{
 				i6,
@@ -1876,6 +1897,24 @@ func TestDAGInsert(t *testing.T) {
 			),
 		},
 
+		"insert ingress w/ force-ssl-redirect: true and allow-http: false": {
+			objs: []interface{}{
+				i6c, sec1, s1,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("b.example.com", routeUpgrade("/", httpService(s1))),
+					),
+				}, &Listener{
+					Port: 443,
+					VirtualHosts: virtualhosts(
+						securevirtualhost("b.example.com", sec1, routeUpgrade("/", httpService(s1))),
+					),
+				},
+			),
+		},
 		"insert ingressroute": {
 			objs: []interface{}{
 				ir1,
@@ -1889,6 +1928,27 @@ func TestDAGInsert(t *testing.T) {
 				},
 			),
 		},
+		"insert ingressroute w/ healthcheck": {
+			objs: []interface{}{
+				ir1e, s1,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("example.com",
+							routeCluster("/", &Cluster{
+								Upstream: httpService(s1),
+								HealthCheck: &ingressroutev1.HealthCheck{
+									Path: "/healthz",
+								},
+							}),
+						),
+					),
+				},
+			),
+		},
+
 		"insert ingressroute with websocket route": {
 			objs: []interface{}{
 				ir11, s1,
@@ -2845,11 +2905,7 @@ func TestDAGInsert(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			b := tc.Builder
-			if b == nil {
-				b = new(Builder)
-			}
-
+			var b Builder
 			for _, o := range tc.objs {
 				b.Insert(o)
 			}
@@ -2928,10 +2984,8 @@ func TestBuilderLookupHTTPService(t *testing.T) {
 
 	tests := map[string]struct {
 		meta
-		port        intstr.IntOrString
-		strategy    string
-		healthcheck *ingressroutev1.HealthCheck
-		want        *HTTPService
+		port intstr.IntOrString
+		want *HTTPService
 	}{
 		"lookup service by port number": {
 			meta: meta{name: "service1", namespace: "default"},
@@ -2964,7 +3018,7 @@ func TestBuilderLookupHTTPService(t *testing.T) {
 					},
 				},
 			}
-			got := b.lookupHTTPService(tc.meta, tc.port, tc.strategy, tc.healthcheck)
+			got := b.lookupHTTPService(tc.meta, tc.port)
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Fatal(diff)
 			}
@@ -3602,7 +3656,7 @@ func TestDAGIngressRouteUniqueFQDNs(t *testing.T) {
 			},
 			want: listeners(
 				&Listener{
-					Port: 10080,
+					Port: 80,
 					VirtualHosts: virtualhosts(
 						&VirtualHost{
 							Name: "example.com",
@@ -3646,10 +3700,7 @@ func TestDAGIngressRouteUniqueFQDNs(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			b := Builder{
-				ExternalInsecurePort: 10080,
-				ExternalSecurePort:   10443,
-			}
+			var b Builder
 			for _, o := range tc.objs {
 				b.Insert(o)
 			}
