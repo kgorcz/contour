@@ -31,6 +31,50 @@ func TestDAGInsert(t *testing.T) {
 	// The DAG is sensitive to ordering, adding an ingress, then a service,
 	// should have the same result as adding a service, then an ingress.
 
+	sec1 := &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "secret",
+			Namespace: "default",
+		},
+		Type: v1.SecretTypeTLS,
+		Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
+	}
+
+	// Invalid cert in the secret
+	sec2 := &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "secret",
+			Namespace: "default",
+		},
+		Type: v1.SecretTypeTLS,
+		Data: secretdata("wrong", "wronger"),
+	}
+
+	// weird secret with a blank ca.crt that
+	// cert manager creates. #1644
+	sec3 := &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "secret",
+			Namespace: "default",
+		},
+		Type: v1.SecretTypeTLS,
+		Data: map[string][]byte{
+			"ca.crt":            []byte(""),
+			v1.TLSCertKey:       []byte(CERTIFICATE),
+			v1.TLSPrivateKeyKey: []byte(RSA_PRIVATE_KEY),
+		},
+	}
+
+	cert1 := &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ca",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			"ca.crt": []byte(CERTIFICATE),
+		},
+	}
+
 	i1 := &v1beta1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "kuard",
@@ -620,10 +664,7 @@ func TestDAGInsert(t *testing.T) {
 			Namespace: "default",
 		},
 		Type: v1.SecretTypeTLS,
-		Data: map[string][]byte{
-			v1.TLSCertKey:       []byte("certificate"),
-			v1.TLSPrivateKeyKey: []byte("key"),
-		},
+		Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
 	}
 
 	s13a := &v1.Service{
@@ -1432,35 +1473,6 @@ func TestDAGInsert(t *testing.T) {
 		},
 	}
 
-	sec1 := &v1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "secret",
-			Namespace: "default",
-		},
-		Type: v1.SecretTypeTLS,
-		Data: secretdata("certificate", "key"),
-	}
-
-	// Invalid cert in the secret
-	sec2 := &v1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "secret",
-			Namespace: "default",
-		},
-		Type: v1.SecretTypeTLS,
-		Data: secretdata("", ""),
-	}
-
-	cert1 := &v1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ca",
-			Namespace: "default",
-		},
-		Data: map[string][]byte{
-			"ca.crt": []byte("ca"),
-		},
-	}
-
 	tests := map[string]struct {
 		objs                  []interface{}
 		disablePermitInsecure bool
@@ -1668,6 +1680,27 @@ func TestDAGInsert(t *testing.T) {
 					Port: 443,
 					VirtualHosts: virtualhosts(
 						securevirtualhost("kuard.example.com", sec1, prefixroute("/", httpService(s1))),
+					),
+				},
+			),
+		},
+		"insert service w/ secret with w/ blank ca.crt": {
+			objs: []interface{}{
+				s1,
+				sec3, // issue 1644
+				i3,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("kuard.example.com", prefixroute("/", httpService(s1))),
+					),
+				},
+				&Listener{
+					Port: 443,
+					VirtualHosts: virtualhosts(
+						securevirtualhost("kuard.example.com", sec3, prefixroute("/", httpService(s1))),
 					),
 				},
 			),
@@ -2996,6 +3029,9 @@ func TestDAGInsert(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			builder := Builder{
 				DisablePermitInsecure: tc.disablePermitInsecure,
+				Source: KubernetesCache{
+					FieldLogger: testLogger(t),
+				},
 			}
 			for _, o := range tc.objs {
 				if !builder.Source.Insert(o) {
@@ -3049,13 +3085,6 @@ func ingressrulevalue(backend *v1beta1.IngressBackend) v1beta1.IngressRuleValue 
 	}
 }
 
-func secretdata(cert, key string) map[string][]byte {
-	return map[string][]byte{
-		v1.TLSCertKey:       []byte(cert),
-		v1.TLSPrivateKeyKey: []byte(key),
-	}
-}
-
 func TestBuilderLookupHTTPService(t *testing.T) {
 	s1 := &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -3106,7 +3135,8 @@ func TestBuilderLookupHTTPService(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			b := Builder{
 				Source: KubernetesCache{
-					services: services,
+					services:    services,
+					FieldLogger: testLogger(t),
 				},
 			}
 			b.reset()
@@ -3236,6 +3266,7 @@ func TestDAGRootNamespaces(t *testing.T) {
 			builder := Builder{
 				Source: KubernetesCache{
 					IngressRouteRootNamespaces: tc.rootNamespaces,
+					FieldLogger:                testLogger(t),
 				},
 			}
 
@@ -3804,6 +3835,7 @@ func TestDAGIngressRouteStatus(t *testing.T) {
 			builder := Builder{
 				Source: KubernetesCache{
 					IngressRouteRootNamespaces: []string{"roots"},
+					FieldLogger:                testLogger(t),
 				},
 			}
 			for _, o := range tc.objs {
@@ -3942,7 +3974,11 @@ func TestDAGIngressRouteUniqueFQDNs(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			var builder Builder
+			builder := Builder{
+				Source: KubernetesCache{
+					FieldLogger: testLogger(t),
+				},
+			}
 			for _, o := range tc.objs {
 				builder.Source.Insert(o)
 			}

@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
+	"github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/api/extensions/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,8 +35,25 @@ func TestKubernetesCacheInsert(t *testing.T) {
 					Name:      "secret",
 					Namespace: "default",
 				},
+				Type: v1.SecretTypeTLS,
+				Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
 			},
 			want: false,
+		},
+		"insert secret w/ blank ca.crt": {
+			obj: &v1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "secret",
+					Namespace: "default",
+				},
+				Type: v1.SecretTypeTLS,
+				Data: map[string][]byte{
+					"ca.crt":            []byte(""),
+					v1.TLSCertKey:       []byte(CERTIFICATE),
+					v1.TLSPrivateKeyKey: []byte(RSA_PRIVATE_KEY),
+				},
+			},
+			want: true,
 		},
 		"insert secret referenced by ingress": {
 			pre: []interface{}{
@@ -56,6 +74,8 @@ func TestKubernetesCacheInsert(t *testing.T) {
 					Name:      "secret",
 					Namespace: "default",
 				},
+				Type: v1.SecretTypeTLS,
+				Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
 			},
 			want: true,
 		},
@@ -72,7 +92,6 @@ func TestKubernetesCacheInsert(t *testing.T) {
 						}},
 					},
 				},
-
 				&ingressroutev1.TLSCertificateDelegation{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "delegation",
@@ -93,6 +112,8 @@ func TestKubernetesCacheInsert(t *testing.T) {
 					Name:      "secret",
 					Namespace: "default",
 				},
+				Type: v1.SecretTypeTLS,
+				Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
 			},
 			want: true,
 		},
@@ -130,6 +151,8 @@ func TestKubernetesCacheInsert(t *testing.T) {
 					Name:      "secret",
 					Namespace: "default",
 				},
+				Type: v1.SecretTypeTLS,
+				Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
 			},
 			want: true,
 		},
@@ -155,6 +178,8 @@ func TestKubernetesCacheInsert(t *testing.T) {
 					Name:      "secret",
 					Namespace: "default",
 				},
+				Type: v1.SecretTypeTLS,
+				Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
 			},
 			want: true,
 		},
@@ -193,6 +218,8 @@ func TestKubernetesCacheInsert(t *testing.T) {
 					Name:      "secret",
 					Namespace: "default",
 				},
+				Type: v1.SecretTypeTLS,
+				Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
 			},
 			want: true,
 		},
@@ -230,6 +257,56 @@ func TestKubernetesCacheInsert(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "secret",
 					Namespace: "default",
+				},
+				Type: v1.SecretTypeTLS,
+				Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
+			},
+			want: true,
+		},
+		"insert certificate secret": {
+			obj: &v1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ca",
+					Namespace: "default",
+				},
+				Data: map[string][]byte{
+					"ca.crt": []byte(CERTIFICATE),
+				},
+			},
+			want: true,
+		},
+		"insert certificate secret referenced by ingressroute": {
+			pre: []interface{}{
+				&ingressroutev1.IngressRoute{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "example-com",
+						Namespace: "default",
+					},
+					Spec: ingressroutev1.IngressRouteSpec{
+						VirtualHost: &ingressroutev1.VirtualHost{
+							Fqdn: "example.com",
+						},
+						Routes: []ingressroutev1.Route{{
+							Match: "/",
+							Services: []ingressroutev1.Service{{
+								Name: "kuard",
+								Port: 8080,
+								UpstreamValidation: &ingressroutev1.UpstreamValidation{
+									CACertificate: "ca",
+									SubjectName:   "example.com",
+								},
+							}},
+						}},
+					},
+				},
+			},
+			obj: &v1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ca",
+					Namespace: "default",
+				},
+				Data: map[string][]byte{
+					"ca.crt": []byte(CERTIFICATE),
 				},
 			},
 			want: true,
@@ -466,7 +543,9 @@ func TestKubernetesCacheInsert(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			var cache KubernetesCache
+			cache := KubernetesCache{
+				FieldLogger: testLogger(t),
+			}
 			for _, p := range tc.pre {
 				cache.Insert(p)
 			}
@@ -480,7 +559,9 @@ func TestKubernetesCacheInsert(t *testing.T) {
 
 func TestKubernetesCacheRemove(t *testing.T) {
 	cache := func(objs ...interface{}) *KubernetesCache {
-		var cache KubernetesCache
+		cache := KubernetesCache{
+			FieldLogger: testLogger(t),
+		}
 		for _, o := range objs {
 			cache.Insert(o)
 		}
@@ -498,12 +579,16 @@ func TestKubernetesCacheRemove(t *testing.T) {
 					Name:      "secret",
 					Namespace: "default",
 				},
+				Type: v1.SecretTypeTLS,
+				Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
 			}),
 			obj: &v1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "secret",
 					Namespace: "default",
 				},
+				Type: v1.SecretTypeTLS,
+				Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
 			},
 			want: true,
 		},
@@ -609,4 +694,19 @@ func TestKubernetesCacheRemove(t *testing.T) {
 			}
 		})
 	}
+}
+
+func testLogger(t *testing.T) logrus.FieldLogger {
+	log := logrus.New()
+	log.Out = &testWriter{t}
+	return log
+}
+
+type testWriter struct {
+	*testing.T
+}
+
+func (t *testWriter) Write(buf []byte) (int, error) {
+	t.Logf("%s", buf)
+	return len(buf), nil
 }
