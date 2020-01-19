@@ -15,7 +15,6 @@ package dag
 
 import (
 	"fmt"
-	"sort"
 	"testing"
 	"time"
 
@@ -1084,7 +1083,7 @@ func TestDAGInsert(t *testing.T) {
 		},
 		Spec: ingressroutev1.IngressRouteSpec{
 			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "*",
+				Fqdn: "bar.com",
 			},
 			Routes: []ingressroutev1.Route{{
 				Match: "/",
@@ -1107,7 +1106,7 @@ func TestDAGInsert(t *testing.T) {
 		},
 		Spec: ingressroutev1.IngressRouteSpec{
 			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "*",
+				Fqdn: "bar.com",
 			},
 			Routes: []ingressroutev1.Route{{
 				Match: "/",
@@ -1130,7 +1129,7 @@ func TestDAGInsert(t *testing.T) {
 		},
 		Spec: ingressroutev1.IngressRouteSpec{
 			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "*",
+				Fqdn: "bar.com",
 			},
 			Routes: []ingressroutev1.Route{{
 				Match: "/",
@@ -1153,7 +1152,7 @@ func TestDAGInsert(t *testing.T) {
 		},
 		Spec: ingressroutev1.IngressRouteSpec{
 			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "*",
+				Fqdn: "bar.com",
 			},
 			Routes: []ingressroutev1.Route{{
 				Match: "/",
@@ -1175,7 +1174,7 @@ func TestDAGInsert(t *testing.T) {
 		},
 		Spec: ingressroutev1.IngressRouteSpec{
 			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "*",
+				Fqdn: "bar.com",
 			},
 			Routes: []ingressroutev1.Route{{
 				Match: "/",
@@ -1197,7 +1196,7 @@ func TestDAGInsert(t *testing.T) {
 		},
 		Spec: ingressroutev1.IngressRouteSpec{
 			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "*",
+				Fqdn: "bar.com",
 			},
 			Routes: []ingressroutev1.Route{{
 				Match: "/",
@@ -1363,6 +1362,20 @@ func TestDAGInsert(t *testing.T) {
 				Protocol:   "TCP",
 				Port:       8080,
 				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	}
+
+	s7 := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "home",
+			Namespace: "finance",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:     "http",
+				Protocol: "TCP",
+				Port:     8080,
 			}},
 		},
 	}
@@ -1917,13 +1930,13 @@ func TestDAGInsert(t *testing.T) {
 		},
 		"insert ingressroute": {
 			objs: []interface{}{
-				ir1,
+				ir1, s1,
 			},
 			want: listeners(
 				&Listener{
 					Port: 80,
 					VirtualHosts: virtualhosts(
-						virtualhost("example.com", route("/")),
+						virtualhost("example.com", route("/", httpService(s1))),
 					),
 				},
 			),
@@ -2175,14 +2188,7 @@ func TestDAGInsert(t *testing.T) {
 			objs: []interface{}{
 				ir2, s2,
 			},
-			want: listeners(
-				&Listener{
-					Port: 80,
-					VirtualHosts: virtualhosts(
-						virtualhost("example.com", route("/", httpService(s2))),
-					),
-				},
-			),
+			want: listeners(),
 		},
 		"insert ingressroute referencing two backends": {
 			objs: []interface{}{
@@ -2272,7 +2278,7 @@ func TestDAGInsert(t *testing.T) {
 				&Listener{
 					Port: 80,
 					VirtualHosts: virtualhosts(
-						virtualhost("*", &Route{
+						virtualhost("bar.com", &Route{
 							Prefix:   "/",
 							Clusters: clustermap(s1),
 							TimeoutPolicy: &TimeoutPolicy{
@@ -2312,7 +2318,7 @@ func TestDAGInsert(t *testing.T) {
 				&Listener{
 					Port: 80,
 					VirtualHosts: virtualhosts(
-						virtualhost("*", &Route{
+						virtualhost("bar.com", &Route{
 							Prefix:   "/",
 							Clusters: clustermap(s1),
 							TimeoutPolicy: &TimeoutPolicy{
@@ -2352,7 +2358,7 @@ func TestDAGInsert(t *testing.T) {
 				&Listener{
 					Port: 80,
 					VirtualHosts: virtualhosts(
-						virtualhost("*", &Route{
+						virtualhost("bar.com", &Route{
 							Prefix:   "/",
 							Clusters: clustermap(s1),
 							TimeoutPolicy: &TimeoutPolicy{
@@ -2460,7 +2466,7 @@ func TestDAGInsert(t *testing.T) {
 				&Listener{
 					Port: 80,
 					VirtualHosts: virtualhosts(
-						virtualhost("*", &Route{
+						virtualhost("bar.com", &Route{
 							Prefix:   "/",
 							Clusters: clustermap(s1),
 							RetryPolicy: &RetryPolicy{
@@ -2482,7 +2488,7 @@ func TestDAGInsert(t *testing.T) {
 				&Listener{
 					Port: 80,
 					VirtualHosts: virtualhosts(
-						virtualhost("*", &Route{
+						virtualhost("bar.com", &Route{
 							Prefix:   "/",
 							Clusters: clustermap(s1),
 							RetryPolicy: &RetryPolicy{
@@ -2505,7 +2511,7 @@ func TestDAGInsert(t *testing.T) {
 				&Listener{
 					Port: 80,
 					VirtualHosts: virtualhosts(
-						virtualhost("*", &Route{
+						virtualhost("bar.com", &Route{
 							Prefix:   "/",
 							Clusters: clustermap(s1),
 							RetryPolicy: &RetryPolicy{
@@ -2891,12 +2897,13 @@ func TestDAGInsert(t *testing.T) {
 						}},
 					},
 				},
+				s7,
 			},
 			want: listeners(
 				&Listener{
 					Port: 80,
 					VirtualHosts: virtualhosts(
-						virtualhost("example.com", route("/finance")),
+						virtualhost("example.com", route("/finance", httpService(s7))),
 					),
 				},
 			),
@@ -2905,11 +2912,11 @@ func TestDAGInsert(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			var b Builder
+			var kc KubernetesCache
 			for _, o := range tc.objs {
-				b.Insert(o)
+				kc.Insert(o)
 			}
-			dag := b.Build()
+			dag := BuildDAG(&kc)
 
 			got := make(map[int]*Listener)
 			dag.Visit(listenerMap(got).Visit)
@@ -2978,32 +2985,32 @@ func TestBuilderLookupHTTPService(t *testing.T) {
 			}},
 		},
 	}
-	services := map[meta]*v1.Service{
+	services := map[Meta]*v1.Service{
 		{name: "service1", namespace: "default"}: s1,
 	}
 
 	tests := map[string]struct {
-		meta
+		Meta
 		port intstr.IntOrString
 		want *HTTPService
 	}{
 		"lookup service by port number": {
-			meta: meta{name: "service1", namespace: "default"},
+			Meta: Meta{name: "service1", namespace: "default"},
 			port: intstr.FromInt(8080),
 			want: httpService(s1),
 		},
 		"lookup service by port name": {
-			meta: meta{name: "service1", namespace: "default"},
+			Meta: Meta{name: "service1", namespace: "default"},
 			port: intstr.FromString("http"),
 			want: httpService(s1),
 		},
 		"lookup service by port number (as string)": {
-			meta: meta{name: "service1", namespace: "default"},
+			Meta: Meta{name: "service1", namespace: "default"},
 			port: intstr.Parse("8080"),
 			want: httpService(s1),
 		},
 		"lookup service by port number (from string)": {
-			meta: meta{name: "service1", namespace: "default"},
+			Meta: Meta{name: "service1", namespace: "default"},
 			port: intstr.FromString("8080"),
 			want: httpService(s1),
 		},
@@ -3012,13 +3019,11 @@ func TestBuilderLookupHTTPService(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			b := builder{
-				source: &Builder{
-					KubernetesCache: KubernetesCache{
-						services: services,
-					},
+				source: &KubernetesCache{
+					services: services,
 				},
 			}
-			got := b.lookupHTTPService(tc.meta, tc.port)
+			got := b.lookupHTTPService(tc.Meta, tc.port)
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Fatal(diff)
 			}
@@ -3066,32 +3071,60 @@ func TestDAGRootNamespaces(t *testing.T) {
 		},
 	}
 
+	s2 := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "allowed1",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:     "http",
+				Protocol: "TCP",
+				Port:     8080,
+			}},
+		},
+	}
+
+	s3 := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "allowed2",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:     "http",
+				Protocol: "TCP",
+				Port:     8080,
+			}},
+		},
+	}
+
 	tests := map[string]struct {
 		rootNamespaces []string
 		objs           []interface{}
 		want           int
 	}{
 		"nil root namespaces": {
-			objs: []interface{}{ir1},
+			objs: []interface{}{ir1, s2},
 			want: 1,
 		},
 		"empty root namespaces": {
-			objs: []interface{}{ir1},
+			objs: []interface{}{ir1, s2},
 			want: 1,
 		},
 		"single root namespace with root ingressroute": {
 			rootNamespaces: []string{"allowed1"},
-			objs:           []interface{}{ir1},
+			objs:           []interface{}{ir1, s2},
 			want:           1,
 		},
 		"multiple root namespaces, one with a root ingressroute": {
 			rootNamespaces: []string{"foo", "allowed1", "bar"},
-			objs:           []interface{}{ir1},
+			objs:           []interface{}{ir1, s2},
 			want:           1,
 		},
 		"multiple root namespaces, each with a root ingressroute": {
 			rootNamespaces: []string{"foo", "allowed1", "allowed2"},
-			objs:           []interface{}{ir1, ir2},
+			objs:           []interface{}{ir1, ir2, s2, s3},
 			want:           2,
 		},
 		"root ingressroute defined outside single root namespaces": {
@@ -3106,22 +3139,20 @@ func TestDAGRootNamespaces(t *testing.T) {
 		},
 		"two root ingressroutes, one inside root namespace, one outside": {
 			rootNamespaces: []string{"foo", "allowed2"},
-			objs:           []interface{}{ir1, ir2},
+			objs:           []interface{}{ir1, ir2, s3},
 			want:           1,
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			b := Builder{
-				KubernetesCache: KubernetesCache{
-					IngressRouteRootNamespaces: tc.rootNamespaces,
-				},
+			kc := &KubernetesCache{
+				IngressRouteRootNamespaces: tc.rootNamespaces,
 			}
 			for _, o := range tc.objs {
-				b.Insert(o)
+				kc.Insert(o)
 			}
-			dag := b.Build()
+			dag := BuildDAG(kc)
 
 			var count int
 			dag.Visit(func(v Vertex) {
@@ -3440,7 +3471,7 @@ func TestDAGIngressRouteStatus(t *testing.T) {
 			Routes: []ingressroutev1.Route{{
 				Match: "/foo",
 				Services: []ingressroutev1.Service{{
-					Name: "foo",
+					Name: "foo2",
 					Port: 8080,
 				}},
 			}},
@@ -3457,7 +3488,7 @@ func TestDAGIngressRouteStatus(t *testing.T) {
 			Routes: []ingressroutev1.Route{{
 				Match: "/bar",
 				Services: []ingressroutev1.Service{{
-					Name: "foo",
+					Name: "foo3",
 					Port: 12345678,
 				}},
 			}},
@@ -3499,92 +3530,195 @@ func TestDAGIngressRouteStatus(t *testing.T) {
 		},
 	}
 
+	// ir15 is invalid because it contains a wildcarded fqdn
+	ir15 := &ingressroutev1.IngressRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "roots",
+			Name:      "example",
+		},
+		Spec: ingressroutev1.IngressRouteSpec{
+			VirtualHost: &ingressroutev1.VirtualHost{
+				Fqdn: "example.*.com",
+			},
+			Routes: []ingressroutev1.Route{{
+				Match: "/foo",
+				Services: []ingressroutev1.Service{{
+					Name: "home",
+					Port: 8080,
+				}},
+			}},
+		},
+	}
+
+	// ir16 is invalid because it references an invalid service
+	ir16 := &ingressroutev1.IngressRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "roots",
+			Name:      "invalidir",
+		},
+		Spec: ingressroutev1.IngressRouteSpec{
+			VirtualHost: &ingressroutev1.VirtualHost{
+				Fqdn: "example.com",
+			},
+			Routes: []ingressroutev1.Route{{
+				Match: "/foo",
+				Services: []ingressroutev1.Service{{
+					Name: "invalid",
+					Port: 8080,
+				}},
+			}},
+		},
+	}
+
+	s4 := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "home",
+			Namespace: "roots",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:     "http",
+				Protocol: "TCP",
+				Port:     8080,
+			}},
+		},
+	}
+
+	s5 := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "roots",
+			Name:      "parent",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:     "http",
+				Protocol: "TCP",
+				Port:     8080,
+			}},
+		},
+	}
+
+	s6 := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "roots",
+			Name:      "foo2",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:     "http",
+				Protocol: "TCP",
+				Port:     8080,
+			}},
+		},
+	}
+
+	s7 := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "foo3",
+			Namespace: "roots",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:     "http",
+				Protocol: "TCP",
+				Port:     12345678,
+			}},
+		},
+	}
+
 	tests := map[string]struct {
-		objs []*ingressroutev1.IngressRoute
+		objs []interface{}
 		want []Status
 	}{
 		"valid ingressroute": {
-			objs: []*ingressroutev1.IngressRoute{ir1},
+			objs: []interface{}{ir1, s4},
 			want: []Status{{Object: ir1, Status: "valid", Description: "valid IngressRoute", Vhost: "example.com"}},
 		},
 		"invalid port in service": {
-			objs: []*ingressroutev1.IngressRoute{ir2},
+			objs: []interface{}{ir2},
 			want: []Status{{Object: ir2, Status: "invalid", Description: `route "/foo": service "home": port must be in the range 1-65535`, Vhost: "example.com"}},
 		},
 		"root ingressroute outside of roots namespace": {
-			objs: []*ingressroutev1.IngressRoute{ir3},
+			objs: []interface{}{ir3},
 			want: []Status{{Object: ir3, Status: "invalid", Description: "root IngressRoute cannot be defined in this namespace"}},
 		},
 		"delegated route's match prefix does not match parent's prefix": {
-			objs: []*ingressroutev1.IngressRoute{ir1, ir4},
+			objs: []interface{}{ir1, ir4, s4},
 			want: []Status{
 				{Object: ir1, Status: "valid", Description: "valid IngressRoute", Vhost: "example.com"},
 				{Object: ir4, Status: "invalid", Description: `the path prefix "/doesnotmatch" does not match the parent's path prefix "/prefix"`, Vhost: "example.com"},
 			},
 		},
 		"invalid weight in service": {
-			objs: []*ingressroutev1.IngressRoute{ir5},
+			objs: []interface{}{ir5},
 			want: []Status{{Object: ir5, Status: "invalid", Description: `route "/foo": service "home": weight must be greater than or equal to zero`, Vhost: "example.com"}},
 		},
 		"root ingressroute does not specify FQDN": {
-			objs: []*ingressroutev1.IngressRoute{ir13},
+			objs: []interface{}{ir13},
 			want: []Status{{Object: ir13, Status: "invalid", Description: "Spec.VirtualHost.Fqdn must be specified"}},
 		},
 		"self-edge produces a cycle": {
-			objs: []*ingressroutev1.IngressRoute{ir6},
+			objs: []interface{}{ir6},
 			want: []Status{{Object: ir6, Status: "invalid", Description: "route creates a delegation cycle: roots/self -> roots/self", Vhost: "example.com"}},
 		},
 		"child delegates to parent, producing a cycle": {
-			objs: []*ingressroutev1.IngressRoute{ir7, ir8},
+			objs: []interface{}{ir7, ir8},
 			want: []Status{
 				{Object: ir7, Status: "valid", Description: "valid IngressRoute", Vhost: "example.com"},
 				{Object: ir8, Status: "invalid", Description: "route creates a delegation cycle: roots/parent -> roots/child -> roots/parent", Vhost: "example.com"},
 			},
 		},
 		"route has a list of services and also delegates": {
-			objs: []*ingressroutev1.IngressRoute{ir9},
+			objs: []interface{}{ir9},
 			want: []Status{{Object: ir9, Status: "invalid", Description: `route "/foo": cannot specify services and delegate in the same route`, Vhost: "example.com"}},
 		},
 		"ingressroute is an orphaned route": {
-			objs: []*ingressroutev1.IngressRoute{ir8},
+			objs: []interface{}{ir8},
 			want: []Status{{Object: ir8, Status: "orphaned", Description: "this IngressRoute is not part of a delegation chain from a root IngressRoute"}},
 		},
 		"ingressroute delegates to multiple ingressroutes, one is invalid": {
-			objs: []*ingressroutev1.IngressRoute{ir10, ir11, ir12},
+			objs: []interface{}{ir10, ir11, ir12, s6, s7},
 			want: []Status{
 				{Object: ir11, Status: "valid", Description: "valid IngressRoute", Vhost: "example.com"},
-				{Object: ir12, Status: "invalid", Description: `route "/bar": service "foo": port must be in the range 1-65535`, Vhost: "example.com"},
+				{Object: ir12, Status: "invalid", Description: `route "/bar": service "foo3": port must be in the range 1-65535`, Vhost: "example.com"},
 				{Object: ir10, Status: "valid", Description: "valid IngressRoute", Vhost: "example.com"},
 			},
 		},
 		"invalid parent orphans children": {
-			objs: []*ingressroutev1.IngressRoute{ir14, ir11},
+			objs: []interface{}{ir14, ir11},
 			want: []Status{
 				{Object: ir14, Status: "invalid", Description: "Spec.VirtualHost.Fqdn must be specified"},
 				{Object: ir11, Status: "orphaned", Description: "this IngressRoute is not part of a delegation chain from a root IngressRoute"},
 			},
 		},
 		"multi-parent children is not orphaned when one of the parents is invalid": {
-			objs: []*ingressroutev1.IngressRoute{ir14, ir11, ir10},
+			objs: []interface{}{ir14, ir11, ir10, s5, s6},
 			want: []Status{
 				{Object: ir14, Status: "invalid", Description: "Spec.VirtualHost.Fqdn must be specified"},
 				{Object: ir11, Status: "valid", Description: "valid IngressRoute", Vhost: "example.com"},
 				{Object: ir10, Status: "valid", Description: "valid IngressRoute", Vhost: "example.com"},
 			},
 		},
+		"invalid FQDN contains wildcard": {
+			objs: []interface{}{ir15},
+			want: []Status{{Object: ir15, Status: "invalid", Description: `Spec.VirtualHost.Fqdn "example.*.com" cannot use wildcards`, Vhost: "example.*.com"}},
+		},
+		"missing service shows invalid status": {
+			objs: []interface{}{ir16},
+			want: []Status{{Object: ir16, Status: "invalid", Description: `Service [invalid:8080] is invalid or missing`, Vhost: ""}},
+		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			b := Builder{
-				KubernetesCache: KubernetesCache{
-					IngressRouteRootNamespaces: []string{"roots"},
-				},
+			kc := &KubernetesCache{
+				IngressRouteRootNamespaces: []string{"roots"},
 			}
 			for _, o := range tc.objs {
-				b.Insert(o)
+				kc.Insert(o)
 			}
-			got := b.Build().Statuses()
+			dag := BuildDAG(kc)
+			got := dag.Statuses()
 			if len(tc.want) != len(got) {
 				t.Fatalf("expected:\n%v\ngot\n%v", tc.want, got)
 			}
@@ -3645,14 +3779,29 @@ func TestDAGIngressRouteUniqueFQDNs(t *testing.T) {
 		},
 	}
 
+	s1 := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:       "http",
+				Protocol:   "TCP",
+				Port:       8080,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	}
+
 	tests := map[string]struct {
 		objs       []interface{}
 		want       []Vertex
-		wantStatus []Status
+		wantStatus map[Meta]Status
 	}{
 		"insert ingressroute": {
 			objs: []interface{}{
-				ir1,
+				s1, ir1,
 			},
 			want: listeners(
 				&Listener{
@@ -3661,14 +3810,14 @@ func TestDAGIngressRouteUniqueFQDNs(t *testing.T) {
 						&VirtualHost{
 							Name: "example.com",
 							routes: routemap(
-								route("/"),
+								route("/", httpService(s1)),
 							),
 						},
 					),
 				},
 			),
-			wantStatus: []Status{
-				{
+			wantStatus: map[Meta]Status{
+				{name: ir1.Name, namespace: ir1.Namespace}: {
 					Object:      ir1,
 					Status:      StatusValid,
 					Description: "valid IngressRoute",
@@ -3681,14 +3830,14 @@ func TestDAGIngressRouteUniqueFQDNs(t *testing.T) {
 				ir1, ir2,
 			},
 			want: []Vertex{},
-			wantStatus: []Status{
-				{
+			wantStatus: map[Meta]Status{
+				{name: ir1.Name, namespace: ir1.Namespace}: {
 					Object:      ir1,
 					Status:      StatusInvalid,
 					Description: `fqdn "example.com" is used in multiple IngressRoutes: default/example-com, default/other-example`,
 					Vhost:       "example.com",
 				},
-				{
+				{name: ir2.Name, namespace: ir2.Namespace}: {
 					Object:      ir2,
 					Status:      StatusInvalid,
 					Description: `fqdn "example.com" is used in multiple IngressRoutes: default/example-com, default/other-example`,
@@ -3700,11 +3849,11 @@ func TestDAGIngressRouteUniqueFQDNs(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			var b Builder
+			var kc KubernetesCache
 			for _, o := range tc.objs {
-				b.Insert(o)
+				kc.Insert(o)
 			}
-			dag := b.Build()
+			dag := BuildDAG(&kc)
 			got := make(map[int]*Listener)
 			dag.Visit(listenerMap(got).Visit)
 
@@ -3723,7 +3872,6 @@ func TestDAGIngressRouteUniqueFQDNs(t *testing.T) {
 			}
 
 			gotStatus := dag.statuses
-			sort.Stable(statusByNamespaceAndName(gotStatus))
 			if diff := cmp.Diff(tc.wantStatus, gotStatus); diff != "" {
 				t.Fatal(diff)
 			}
@@ -3831,12 +3979,12 @@ func TestEnforceRoute(t *testing.T) {
 func TestSplitSecret(t *testing.T) {
 	tests := map[string]struct {
 		secret, defns string
-		want          meta
+		want          Meta
 	}{
 		"no namespace": {
 			secret: "secret",
 			defns:  "default",
-			want: meta{
+			want: Meta{
 				name:      "secret",
 				namespace: "default",
 			},
@@ -3844,7 +3992,7 @@ func TestSplitSecret(t *testing.T) {
 		"with namespace": {
 			secret: "ns1/secret",
 			defns:  "default",
-			want: meta{
+			want: Meta{
 				name:      "secret",
 				namespace: "ns1",
 			},
@@ -3852,7 +4000,7 @@ func TestSplitSecret(t *testing.T) {
 		"missing namespace": {
 			secret: "/secret",
 			defns:  "default",
-			want: meta{
+			want: Meta{
 				name:      "secret",
 				namespace: "default",
 			},
@@ -3860,7 +4008,7 @@ func TestSplitSecret(t *testing.T) {
 		"missing secret name": {
 			secret: "secret/",
 			defns:  "default",
-			want: meta{
+			want: Meta{
 				name:      "",
 				namespace: "secret",
 			},
@@ -3871,7 +4019,7 @@ func TestSplitSecret(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			got := splitSecret(tc.secret, tc.defns)
 			opts := []cmp.Option{
-				cmp.AllowUnexported(meta{}),
+				cmp.AllowUnexported(Meta{}),
 			}
 			if diff := cmp.Diff(tc.want, got, opts...); diff != "" {
 				t.Fatal(diff)
@@ -3961,14 +4109,6 @@ func clustermap(services ...*v1.Service) []*Cluster {
 		})
 	}
 	return c
-}
-
-type statusByNamespaceAndName []Status
-
-func (s statusByNamespaceAndName) Len() int      { return len(s) }
-func (s statusByNamespaceAndName) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
-func (s statusByNamespaceAndName) Less(i, j int) bool {
-	return s[i].Object.Namespace+s[i].Object.Name < s[j].Object.Namespace+s[j].Object.Name
 }
 
 func secret(s *v1.Secret) *Secret {

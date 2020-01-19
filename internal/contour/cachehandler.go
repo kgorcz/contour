@@ -17,6 +17,8 @@
 package contour
 
 import (
+	"time"
+
 	"github.com/heptio/contour/internal/dag"
 	"github.com/heptio/contour/internal/k8s"
 	"github.com/heptio/contour/internal/metrics"
@@ -38,19 +40,20 @@ type CacheHandler struct {
 }
 
 type statusable interface {
-	Statuses() []dag.Status
+	Statuses() map[dag.Meta]dag.Status
 }
 
-func (ch *CacheHandler) OnChange(b *dag.Builder) {
+func (ch *CacheHandler) OnChange(kc *dag.KubernetesCache) {
 	timer := prometheus.NewTimer(ch.CacheHandlerOnUpdateSummary)
 	defer timer.ObserveDuration()
-	dag := b.Build()
+	dag := dag.BuildDAG(kc)
 	ch.setIngressRouteStatus(dag)
 	ch.updateSecrets(dag)
 	ch.updateListeners(dag)
 	ch.updateRoutes(dag)
 	ch.updateClusters(dag)
 	ch.updateIngressRouteMetric(dag)
+	ch.SetDAGLastRebuilt(time.Now())
 }
 
 func (ch *CacheHandler) setIngressRouteStatus(st statusable) {

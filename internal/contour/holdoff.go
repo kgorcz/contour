@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/heptio/contour/internal/dag"
-	"github.com/heptio/contour/internal/metrics"
 	"github.com/sirupsen/logrus"
 )
 
@@ -36,7 +35,6 @@ const (
 type HoldoffNotifier struct {
 	// Notifier to be called after delay.
 	Notifier
-	*metrics.Metrics
 
 	logrus.FieldLogger
 
@@ -46,7 +44,7 @@ type HoldoffNotifier struct {
 	pending counter
 }
 
-func (hn *HoldoffNotifier) OnChange(builder *dag.Builder) {
+func (hn *HoldoffNotifier) OnChange(kc *dag.KubernetesCache) {
 	hn.pending.inc()
 	hn.mu.Lock()
 	defer hn.mu.Unlock()
@@ -57,9 +55,8 @@ func (hn *HoldoffNotifier) OnChange(builder *dag.Builder) {
 	if since > holdoffMaxDelay {
 		// update immediately
 		hn.WithField("last_update", since).WithField("pending", hn.pending.reset()).Info("forcing update")
-		hn.Notifier.OnChange(builder)
+		hn.Notifier.OnChange(kc)
 		hn.last = time.Now()
-		hn.Metrics.SetDAGRebuiltMetric(hn.last.Unix())
 		return
 	}
 
@@ -67,9 +64,8 @@ func (hn *HoldoffNotifier) OnChange(builder *dag.Builder) {
 		hn.mu.Lock()
 		defer hn.mu.Unlock()
 		hn.WithField("last_update", time.Since(hn.last)).WithField("pending", hn.pending.reset()).Info("performing delayed update")
-		hn.Notifier.OnChange(builder)
+		hn.Notifier.OnChange(kc)
 		hn.last = time.Now()
-		hn.Metrics.SetDAGRebuiltMetric(hn.last.Unix())
 	})
 }
 
