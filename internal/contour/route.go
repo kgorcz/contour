@@ -147,14 +147,31 @@ func (v *routeVisitor) visit(vertex dag.Vertex) {
 			case *dag.VirtualHost:
 				vhost := envoy.VirtualHost(vh.Name)
 				vh.Visit(func(v dag.Vertex) {
-					if r, ok := v.(*dag.Route); ok {
+					switch r := v.(type) {
+					case *dag.PrefixRoute:
 						if len(r.Clusters) < 1 {
 							// no services for this route, skip it.
 							return
 						}
 						rr := route.Route{
-							Match:               envoy.PrefixMatch(r.Prefix),
-							Action:              envoy.RouteRoute(r),
+							Match:               envoy.RoutePrefix(r.Prefix),
+							Action:              envoy.RouteRoute(&r.Route),
+							RequestHeadersToAdd: envoy.RouteHeaders(),
+						}
+
+						if r.HTTPSUpgrade {
+							rr.Action = envoy.UpgradeHTTPS()
+							rr.RequestHeadersToAdd = nil
+						}
+						vhost.Routes = append(vhost.Routes, rr)
+					case *dag.RegexRoute:
+						if len(r.Clusters) < 1 {
+							// no services for this route, skip it.
+							return
+						}
+						rr := route.Route{
+							Match:               envoy.RouteRegex(r.Regex),
+							Action:              envoy.RouteRoute(&r.Route),
 							RequestHeadersToAdd: envoy.RouteHeaders(),
 						}
 
@@ -168,27 +185,39 @@ func (v *routeVisitor) visit(vertex dag.Vertex) {
 				if len(vhost.Routes) < 1 {
 					return
 				}
-				sort.Stable(sort.Reverse(longestRouteFirst(vhost.Routes)))
+				sort.Stable(longestRouteFirst(vhost.Routes))
 				v.routes["ingress_http"].VirtualHosts = append(v.routes["ingress_http"].VirtualHosts, vhost)
 			case *dag.SecureVirtualHost:
 				vhost := envoy.VirtualHost(vh.VirtualHost.Name)
 				vh.Visit(func(v dag.Vertex) {
-					if r, ok := v.(*dag.Route); ok {
+					switch r := v.(type) {
+					case *dag.PrefixRoute:
 						if len(r.Clusters) < 1 {
 							// no services for this route, skip it.
 							return
 						}
 						vhost.Routes = append(vhost.Routes, route.Route{
-							Match:               envoy.PrefixMatch(r.Prefix),
-							Action:              envoy.RouteRoute(r),
+							Match:               envoy.RoutePrefix(r.Prefix),
+							Action:              envoy.RouteRoute(&r.Route),
 							RequestHeadersToAdd: envoy.RouteHeaders(),
 						})
+					case *dag.RegexRoute:
+						if len(r.Clusters) < 1 {
+							// no services for this route, skip it.
+							return
+						}
+						vhost.Routes = append(vhost.Routes, route.Route{
+							Match:               envoy.RouteRegex(r.Regex),
+							Action:              envoy.RouteRoute(&r.Route),
+							RequestHeadersToAdd: envoy.RouteHeaders(),
+						})
+
 					}
 				})
 				if len(vhost.Routes) < 1 {
 					return
 				}
-				sort.Stable(sort.Reverse(longestRouteFirst(vhost.Routes)))
+				sort.Stable(longestRouteFirst(vhost.Routes))
 				v.routes["ingress_https"].VirtualHosts = append(v.routes["ingress_https"].VirtualHosts, vhost)
 			default:
 				// recurse
@@ -212,19 +241,21 @@ type longestRouteFirst []route.Route
 func (l longestRouteFirst) Len() int      { return len(l) }
 func (l longestRouteFirst) Swap(i, j int) { l[i], l[j] = l[j], l[i] }
 func (l longestRouteFirst) Less(i, j int) bool {
-	a, ok := l[i].Match.PathSpecifier.(*route.RouteMatch_Prefix)
-	if !ok {
-		// ignore non prefix matches
-		return false
+	switch a := l[i].Match.PathSpecifier.(type) {
+	case *route.RouteMatch_Prefix:
+		switch b := l[j].Match.PathSpecifier.(type) {
+		case *route.RouteMatch_Prefix:
+			return a.Prefix > b.Prefix
+		}
+	case *route.RouteMatch_Regex:
+		switch b := l[j].Match.PathSpecifier.(type) {
+		case *route.RouteMatch_Regex:
+			return a.Regex > b.Regex
+		case *route.RouteMatch_Prefix:
+			return true
+		}
 	}
-
-	b, ok := l[j].Match.PathSpecifier.(*route.RouteMatch_Prefix)
-	if !ok {
-		// ignore non prefix matches
-		return false
-	}
-
-	return a.Prefix < b.Prefix
+	return false
 }
 
 func u32(val int) *types.UInt32Value { return &types.UInt32Value{Value: uint32(val)} }

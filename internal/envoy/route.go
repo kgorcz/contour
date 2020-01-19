@@ -157,8 +157,17 @@ func weightedClusters(clusters []*dag.Cluster) *route.WeightedCluster {
 	return &wc
 }
 
-// PrefixMatch creates a RouteMatch for the supplied prefix.
-func PrefixMatch(prefix string) route.RouteMatch {
+// RouteRegex returns a regex matcher.
+func RouteRegex(regex string) route.RouteMatch {
+	return route.RouteMatch{
+		PathSpecifier: &route.RouteMatch_Regex{
+			Regex: regex,
+		},
+	}
+}
+
+// RoutePrefix returns a prefix matcher.
+func RoutePrefix(prefix string) route.RouteMatch {
 	return route.RouteMatch{
 		PathSpecifier: &route.RouteMatch_Prefix{
 			Prefix: prefix,
