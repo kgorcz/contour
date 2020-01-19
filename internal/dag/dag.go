@@ -18,10 +18,9 @@ package dag
 import (
 	"time"
 
-	v1 "k8s.io/api/core/v1"
-
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/auth"
 	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
+	"k8s.io/api/core/v1"
 )
 
 // A DAG represents a directed acylic graph of objects representing the relationship
@@ -49,9 +48,8 @@ func (d *DAG) Statuses() []Status {
 }
 
 type Route struct {
-	Prefix       string
-	object       interface{} // one of Ingress or IngressRoute
-	httpServices map[servicemeta]*HTTPService
+	Prefix   string
+	Clusters []*Cluster
 
 	// Should this route generate a 301 upgrade if accessed
 	// over HTTP?
@@ -61,12 +59,30 @@ type Route struct {
 	// TODO(dfc) this should go on the service
 	Websocket bool
 
+	// TimeoutPolicy defines the timeout request/idle
+	TimeoutPolicy *TimeoutPolicy
+
+	// RetryPolicy defines the retry / number / timeout options for a route
+	RetryPolicy *RetryPolicy
+
+	// Indicates that during forwarding, the matched prefix (or path) should be swapped with this value
+	PrefixRewrite string
+
+	// UpstreamValidation defines how to verify the backend service's certificate
+	UpstreamValidation *UpstreamValidation
+}
+
+// TimeoutPolicy defines the timeout request/idle
+type TimeoutPolicy struct {
 	// A timeout applied to requests on this route.
 	// A timeout of zero implies "use envoy's default"
 	// A timeout of -1 represents "infinity"
 	// TODO(dfc) should this move to service?
 	Timeout time.Duration
+}
 
+// RetryPolicy defines the retry / number / timeout options
+type RetryPolicy struct {
 	// RetryOn specifies the conditions under which retry takes place.
 	// If empty, retries will not be performed.
 	RetryOn string
@@ -78,20 +94,28 @@ type Route struct {
 	// PerTryTimeout specifies the timeout per retry attempt.
 	// Ignored if RetryOn is blank.
 	PerTryTimeout time.Duration
-
-	// Indicates that during forwarding, the matched prefix (or path) should be swapped with this value
-	PrefixRewrite string
 }
 
-func (r *Route) addHTTPService(s *HTTPService) {
-	if r.httpServices == nil {
-		r.httpServices = make(map[servicemeta]*HTTPService)
-	}
-	r.httpServices[s.toMeta()] = s
+// UpstreamValidation defines how to validate the certificate on the upstream service
+type UpstreamValidation struct {
+	// CACertificate holds a reference to the Secret containing the CA to be used to
+	// verify the upstream connection.
+	CACertificate *Secret
+	// SubjectName holds an optional subject name which Envoy will check against the
+	// certificate presented by the upstream.
+	SubjectName string
+}
+
+func (r *Route) addHTTPService(s *HTTPService, weight int, uv *UpstreamValidation) {
+	r.Clusters = append(r.Clusters, &Cluster{
+		Upstream:           s,
+		Weight:             weight,
+		UpstreamValidation: uv,
+	})
 }
 
 func (r *Route) Visit(f func(Vertex)) {
-	for _, c := range r.httpServices {
+	for _, c := range r.Clusters {
 		f(c)
 	}
 }
@@ -179,12 +203,14 @@ func (l *Listener) Visit(f func(Vertex)) {
 
 // TCPProxy represents a cluster of TCP endpoints.
 type TCPProxy struct {
-	// Services to proxy decrypted traffic to.
-	Services []*TCPService
+
+	// Clusters is the, possibly weighted, set
+	// of upstream services to forward decrypted traffic.
+	Clusters []*Cluster
 }
 
 func (t *TCPProxy) Visit(f func(Vertex)) {
-	for _, s := range t.Services {
+	for _, s := range t.Clusters {
 		f(s)
 	}
 }
@@ -194,7 +220,6 @@ type TCPService struct {
 	Name, Namespace string
 
 	*v1.ServicePort
-	Weight int
 
 	// The load balancer type to use when picking a host in the cluster.
 	// See https://www.envoyproxy.io/docs/envoy/latest/api-v2/api/v2/cds.proto#envoy-api-enum-cluster-lbpolicy
@@ -225,7 +250,6 @@ type servicemeta struct {
 	name        string
 	namespace   string
 	port        int32
-	weight      int
 	strategy    string
 	healthcheck string // %#v of *ingressroutev1.HealthCheck
 }
@@ -235,7 +259,6 @@ func (s *TCPService) toMeta() servicemeta {
 		name:        s.Name,
 		namespace:   s.Namespace,
 		port:        s.Port,
-		weight:      s.Weight,
 		strategy:    s.LoadBalancerStrategy,
 		healthcheck: healthcheckToString(s.HealthCheck),
 	}
@@ -243,6 +266,25 @@ func (s *TCPService) toMeta() servicemeta {
 
 func (s *TCPService) Visit(func(Vertex)) {
 	// TCPServices are leaves in the DAG.
+}
+
+// Cluster holds the connetion specific parameters that apply to
+// traffic routed to an upstream service.
+type Cluster struct {
+
+	// Upstream is the backend Kubernetes service traffic arriving
+	// at this Cluster will be forwarded too.
+	Upstream Service
+
+	// The relative weight of this Cluster compared to its siblings.
+	Weight int
+
+	// UpstreamValidation defines how to verify the backend service's certificate
+	UpstreamValidation *UpstreamValidation
+}
+
+func (c Cluster) Visit(f func(Vertex)) {
+	f(c.Upstream)
 }
 
 // HTTPService represents a Kuberneres Service object which speaks
@@ -268,6 +310,16 @@ func (s *Secret) Visit(func(Vertex)) {}
 // Data returns the contents of the backing secret's map.
 func (s *Secret) Data() map[string][]byte {
 	return s.Object.Data
+}
+
+// Cert returns the secret's tls certificate
+func (s *Secret) Cert() []byte {
+	return s.Object.Data[v1.TLSCertKey]
+}
+
+// PrivateKey returns the secret's tls private key
+func (s *Secret) PrivateKey() []byte {
+	return s.Object.Data[v1.TLSPrivateKeyKey]
 }
 
 func (s *Secret) toMeta() meta {

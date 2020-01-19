@@ -40,24 +40,29 @@ func TestRouteRoute(t *testing.T) {
 			}},
 		},
 	}
+	c1 := &dag.Cluster{
+		Upstream: &dag.TCPService{
+			Name:        s1.Name,
+			Namespace:   s1.Namespace,
+			ServicePort: &s1.Spec.Ports[0],
+		},
+	}
+
 	tests := map[string]struct {
 		route    *dag.Route
-		services []*dag.HTTPService
+		clusters []*dag.Cluster
 		want     *route.Route_Route
 	}{
 		"single service": {
 			route: &dag.Route{
 				Prefix: "/",
 			},
-			services: []*dag.HTTPService{{
-				TCPService: service(s1),
-			}},
+			clusters: []*dag.Cluster{c1},
 			want: &route.Route_Route{
 				Route: &route.RouteAction{
 					ClusterSpecifier: &route.RouteAction_Cluster{
 						Cluster: "default/kuard/8080/da39a3ee5e",
 					},
-					RequestHeadersToAdd: headers(appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%")),
 				},
 			},
 		},
@@ -67,17 +72,12 @@ func TestRouteRoute(t *testing.T) {
 				Prefix:    "/",
 				Websocket: true,
 			},
-			services: []*dag.HTTPService{{
-				TCPService: service(s1),
-			}},
+			clusters: []*dag.Cluster{c1},
 			want: &route.Route_Route{
 				Route: &route.RouteAction{
 					ClusterSpecifier: &route.RouteAction_Cluster{
 						Cluster: "default/kuard/8080/da39a3ee5e",
 					},
-					RequestHeadersToAdd: headers(
-						appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%"),
-					),
 					UpgradeConfigs: []*route.RouteAction_UpgradeConfig{{
 						UpgradeType: "websocket",
 					}},
@@ -88,16 +88,17 @@ func TestRouteRoute(t *testing.T) {
 			route: &dag.Route{
 				Prefix: "/",
 			},
-			services: []*dag.HTTPService{{
-				TCPService: dag.TCPService{
+			clusters: []*dag.Cluster{{
+				Upstream: &dag.TCPService{
 					Name:        s1.Name,
 					Namespace:   s1.Namespace,
 					ServicePort: &s1.Spec.Ports[0],
-					Weight:      90,
 				},
+				Weight: 90,
 			}, {
-				TCPService: dag.TCPService{
-					Name: s1.Name, Namespace: s1.Namespace, // it's valid to mention the same service several times per route.
+				Upstream: &dag.TCPService{
+					Name:        s1.Name,
+					Namespace:   s1.Namespace, // it's valid to mention the same service several times per route.
 					ServicePort: &s1.Spec.Ports[0],
 				},
 			}},
@@ -106,13 +107,11 @@ func TestRouteRoute(t *testing.T) {
 					ClusterSpecifier: &route.RouteAction_WeightedClusters{
 						WeightedClusters: &route.WeightedCluster{
 							Clusters: []*route.WeightedCluster_ClusterWeight{{
-								Name:                "default/kuard/8080/da39a3ee5e",
-								Weight:              u32(0),
-								RequestHeadersToAdd: headers(appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%")),
+								Name:   "default/kuard/8080/da39a3ee5e",
+								Weight: u32(0),
 							}, {
-								Name:                "default/kuard/8080/da39a3ee5e",
-								Weight:              u32(90),
-								RequestHeadersToAdd: headers(appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%")),
+								Name:   "default/kuard/8080/da39a3ee5e",
+								Weight: u32(90),
 							}},
 							TotalWeight: u32(90),
 						},
@@ -125,28 +124,30 @@ func TestRouteRoute(t *testing.T) {
 				Prefix:    "/",
 				Websocket: true,
 			},
-			services: []*dag.HTTPService{{
-				TCPService: dag.TCPService{
+			clusters: []*dag.Cluster{{
+				Upstream: &dag.TCPService{
 					Name:        s1.Name,
 					Namespace:   s1.Namespace,
 					ServicePort: &s1.Spec.Ports[0],
-					Weight:      90,
 				},
+				Weight: 90,
 			}, {
-				TCPService: service(s1), // it's valid to mention the same service several times per route.
+				Upstream: &dag.TCPService{
+					Name:        s1.Name,
+					Namespace:   s1.Namespace, // it's valid to mention the same service several times per route.
+					ServicePort: &s1.Spec.Ports[0],
+				},
 			}},
 			want: &route.Route_Route{
 				Route: &route.RouteAction{
 					ClusterSpecifier: &route.RouteAction_WeightedClusters{
 						WeightedClusters: &route.WeightedCluster{
 							Clusters: []*route.WeightedCluster_ClusterWeight{{
-								Name:                "default/kuard/8080/da39a3ee5e",
-								Weight:              u32(0),
-								RequestHeadersToAdd: headers(appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%")),
+								Name:   "default/kuard/8080/da39a3ee5e",
+								Weight: u32(0),
 							}, {
-								Name:                "default/kuard/8080/da39a3ee5e",
-								Weight:              u32(90),
-								RequestHeadersToAdd: headers(appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%")),
+								Name:   "default/kuard/8080/da39a3ee5e",
+								Weight: u32(90),
 							}},
 							TotalWeight: u32(90),
 						},
@@ -159,39 +160,35 @@ func TestRouteRoute(t *testing.T) {
 		},
 		"single service without retry-on": {
 			route: &dag.Route{
-				NumRetries:    7,                // ignored
-				PerTryTimeout: 10 * time.Second, // ignored
+				RetryPolicy: &dag.RetryPolicy{
+					NumRetries:    7,                // ignored
+					PerTryTimeout: 10 * time.Second, // ignored
+				},
 			},
-			services: []*dag.HTTPService{{
-				TCPService: service(s1),
-			}},
+			clusters: []*dag.Cluster{c1},
 			want: &route.Route_Route{
 				Route: &route.RouteAction{
 					ClusterSpecifier: &route.RouteAction_Cluster{
 						Cluster: "default/kuard/8080/da39a3ee5e",
 					},
-					RequestHeadersToAdd: headers(appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%")),
 				},
 			},
 		},
 		"retry-on: 503": {
 			route: &dag.Route{
-				Prefix:        "/",
-				RetryOn:       "503",
-				NumRetries:    6,
-				PerTryTimeout: 100 * time.Millisecond,
+				Prefix: "/",
+				RetryPolicy: &dag.RetryPolicy{
+					RetryOn:       "503",
+					NumRetries:    6,
+					PerTryTimeout: 100 * time.Millisecond,
+				},
 			},
-			services: []*dag.HTTPService{{
-				TCPService: service(s1),
-			}},
+			clusters: []*dag.Cluster{c1},
 			want: &route.Route_Route{
 				Route: &route.RouteAction{
 					ClusterSpecifier: &route.RouteAction_Cluster{
 						Cluster: "default/kuard/8080/da39a3ee5e",
 					},
-					RequestHeadersToAdd: headers(
-						appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%"),
-					),
 					RetryPolicy: &route.RetryPolicy{
 						RetryOn:       "503",
 						NumRetries:    u32(6),
@@ -202,40 +199,34 @@ func TestRouteRoute(t *testing.T) {
 		},
 		"timeout 90s": {
 			route: &dag.Route{
-				Prefix:  "/",
-				Timeout: 90 * time.Second,
+				Prefix: "/",
+				TimeoutPolicy: &dag.TimeoutPolicy{
+					Timeout: 90 * time.Second,
+				},
 			},
-			services: []*dag.HTTPService{{
-				TCPService: service(s1),
-			}},
+			clusters: []*dag.Cluster{c1},
 			want: &route.Route_Route{
 				Route: &route.RouteAction{
 					ClusterSpecifier: &route.RouteAction_Cluster{
 						Cluster: "default/kuard/8080/da39a3ee5e",
 					},
-					RequestHeadersToAdd: headers(
-						appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%"),
-					),
 					Timeout: duration(90 * time.Second),
 				},
 			},
 		},
 		"timeout infinity": {
 			route: &dag.Route{
-				Prefix:  "/",
-				Timeout: -1,
+				Prefix: "/",
+				TimeoutPolicy: &dag.TimeoutPolicy{
+					Timeout: -1,
+				},
 			},
-			services: []*dag.HTTPService{{
-				TCPService: service(s1),
-			}},
+			clusters: []*dag.Cluster{c1},
 			want: &route.Route_Route{
 				Route: &route.RouteAction{
 					ClusterSpecifier: &route.RouteAction_Cluster{
 						Cluster: "default/kuard/8080/da39a3ee5e",
 					},
-					RequestHeadersToAdd: headers(
-						appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%"),
-					),
 					Timeout: duration(0),
 				},
 			},
@@ -244,7 +235,7 @@ func TestRouteRoute(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := RouteRoute(tc.route, tc.services)
+			got := RouteRoute(tc.route, tc.clusters)
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Fatal(diff)
 			}
@@ -254,12 +245,12 @@ func TestRouteRoute(t *testing.T) {
 
 func TestWeightedClusters(t *testing.T) {
 	tests := map[string]struct {
-		services []*dag.HTTPService
+		clusters []*dag.Cluster
 		want     *route.WeightedCluster
 	}{
 		"multiple services w/o weights": {
-			services: []*dag.HTTPService{{
-				TCPService: dag.TCPService{
+			clusters: []*dag.Cluster{{
+				Upstream: &dag.TCPService{
 					Name:      "kuard",
 					Namespace: "default",
 					ServicePort: &v1.ServicePort{
@@ -267,7 +258,7 @@ func TestWeightedClusters(t *testing.T) {
 					},
 				},
 			}, {
-				TCPService: dag.TCPService{
+				Upstream: &dag.TCPService{
 					Name:      "nginx",
 					Namespace: "default",
 					ServicePort: &v1.ServicePort{
@@ -277,71 +268,67 @@ func TestWeightedClusters(t *testing.T) {
 			}},
 			want: &route.WeightedCluster{
 				Clusters: []*route.WeightedCluster_ClusterWeight{{
-					Name:                "default/kuard/8080/da39a3ee5e",
-					Weight:              u32(1),
-					RequestHeadersToAdd: headers(appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%")),
+					Name:   "default/kuard/8080/da39a3ee5e",
+					Weight: u32(1),
 				}, {
-					Name:                "default/nginx/8080/da39a3ee5e",
-					Weight:              u32(1),
-					RequestHeadersToAdd: headers(appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%")),
+					Name:   "default/nginx/8080/da39a3ee5e",
+					Weight: u32(1),
 				}},
 				TotalWeight: u32(2),
 			},
 		},
 		"multiple weighted services": {
-			services: []*dag.HTTPService{{
-				TCPService: dag.TCPService{
+			clusters: []*dag.Cluster{{
+				Upstream: &dag.TCPService{
 					Name:      "kuard",
 					Namespace: "default",
 					ServicePort: &v1.ServicePort{
 						Port: 8080,
 					},
-					Weight: 80,
 				},
+				Weight: 80,
 			}, {
-				TCPService: dag.TCPService{
+				Upstream: &dag.TCPService{
 					Name:      "nginx",
 					Namespace: "default",
 					ServicePort: &v1.ServicePort{
 						Port: 8080,
 					},
-					Weight: 20,
 				},
+				Weight: 20,
 			}},
 			want: &route.WeightedCluster{
 				Clusters: []*route.WeightedCluster_ClusterWeight{{
-					Name:                "default/kuard/8080/da39a3ee5e",
-					Weight:              u32(80),
-					RequestHeadersToAdd: headers(appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%")),
+					Name:   "default/kuard/8080/da39a3ee5e",
+					Weight: u32(80),
 				}, {
-					Name:                "default/nginx/8080/da39a3ee5e",
-					Weight:              u32(20),
-					RequestHeadersToAdd: headers(appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%")),
+					Name:   "default/nginx/8080/da39a3ee5e",
+					Weight: u32(20),
 				}},
 				TotalWeight: u32(100),
 			},
 		},
 		"multiple weighted services and one with no weight specified": {
-			services: []*dag.HTTPService{{
-				TCPService: dag.TCPService{
+			clusters: []*dag.Cluster{{
+				Upstream: &dag.TCPService{
 					Name:      "kuard",
 					Namespace: "default",
 					ServicePort: &v1.ServicePort{
 						Port: 8080,
 					},
-					Weight: 80,
 				},
+				Weight: 80,
 			}, {
-				TCPService: dag.TCPService{
+				Upstream: &dag.TCPService{
 					Name:      "nginx",
 					Namespace: "default",
 					ServicePort: &v1.ServicePort{
 						Port: 8080,
 					},
-					Weight: 20,
 				},
+				Weight: 20,
 			}, {
-				TCPService: dag.TCPService{
+				Upstream: &dag.TCPService{
 					Name:      "notraffic",
 					Namespace: "default",
 					ServicePort: &v1.ServicePort{
@@ -351,17 +338,14 @@ func TestWeightedClusters(t *testing.T) {
 			}},
 			want: &route.WeightedCluster{
 				Clusters: []*route.WeightedCluster_ClusterWeight{{
-					Name:                "default/kuard/8080/da39a3ee5e",
-					Weight:              u32(80),
-					RequestHeadersToAdd: headers(appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%")),
+					Name:   "default/kuard/8080/da39a3ee5e",
+					Weight: u32(80),
 				}, {
-					Name:                "default/nginx/8080/da39a3ee5e",
-					Weight:              u32(20),
-					RequestHeadersToAdd: headers(appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%")),
+					Name:   "default/nginx/8080/da39a3ee5e",
+					Weight: u32(20),
 				}, {
-					Name:                "default/notraffic/8080/da39a3ee5e",
-					Weight:              u32(0),
-					RequestHeadersToAdd: headers(appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%")),
+					Name:   "default/notraffic/8080/da39a3ee5e",
+					Weight: u32(0),
 				}},
 				TotalWeight: u32(100),
 			},
@@ -370,7 +354,7 @@ func TestWeightedClusters(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := weightedClusters(tc.services)
+			got := weightedClusters(tc.clusters)
 			if diff := cmp.Diff(got, tc.want); diff != "" {
 				t.Fatal(diff)
 			}

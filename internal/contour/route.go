@@ -116,23 +116,19 @@ func (v *routeVisitor) visit(vertex dag.Vertex) {
 				vhost := envoy.VirtualHost(vh.Name, l.Port)
 				vh.Visit(func(v dag.Vertex) {
 					if r, ok := v.(*dag.Route); ok {
-						var svcs []*dag.HTTPService
-						r.Visit(func(s dag.Vertex) {
-							if s, ok := s.(*dag.HTTPService); ok {
-								svcs = append(svcs, s)
-							}
-						})
-						if len(svcs) < 1 {
+						if len(r.Clusters) < 1 {
 							// no services for this route, skip it.
 							return
 						}
 						rr := route.Route{
-							Match:  envoy.PrefixMatch(r.Prefix),
-							Action: envoy.RouteRoute(r, svcs),
+							Match:               envoy.PrefixMatch(r.Prefix),
+							Action:              envoy.RouteRoute(r, r.Clusters),
+							RequestHeadersToAdd: envoy.RouteHeaders(),
 						}
 
 						if r.HTTPSUpgrade {
 							rr.Action = envoy.UpgradeHTTPS()
+							rr.RequestHeadersToAdd = nil
 						}
 						vhost.Routes = append(vhost.Routes, rr)
 					}
@@ -146,19 +142,14 @@ func (v *routeVisitor) visit(vertex dag.Vertex) {
 				vhost := envoy.VirtualHost(vh.VirtualHost.Name, l.Port)
 				vh.Visit(func(v dag.Vertex) {
 					if r, ok := v.(*dag.Route); ok {
-						var svcs []*dag.HTTPService
-						r.Visit(func(s dag.Vertex) {
-							if s, ok := s.(*dag.HTTPService); ok {
-								svcs = append(svcs, s)
-							}
-						})
-						if len(svcs) < 1 {
+						if len(r.Clusters) < 1 {
 							// no services for this route, skip it.
 							return
 						}
 						vhost.Routes = append(vhost.Routes, route.Route{
-							Match:  envoy.PrefixMatch(r.Prefix),
-							Action: envoy.RouteRoute(r, svcs),
+							Match:               envoy.PrefixMatch(r.Prefix),
+							Action:              envoy.RouteRoute(r, r.Clusters),
+							RequestHeadersToAdd: envoy.RouteHeaders(),
 						})
 					}
 				})
@@ -205,14 +196,3 @@ func (l longestRouteFirst) Less(i, j int) bool {
 }
 
 func u32(val int) *types.UInt32Value { return &types.UInt32Value{Value: uint32(val)} }
-
-var bvTrue = types.BoolValue{Value: true}
-
-// bv returns a pointer to a true types.BoolValue if val is true,
-// otherwise it returns nil.
-func bv(val bool) *types.BoolValue {
-	if val {
-		return &bvTrue
-	}
-	return nil
-}

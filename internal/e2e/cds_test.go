@@ -63,12 +63,12 @@ func TestClusterLongServiceName(t *testing.T) {
 
 	// check that it's been translated correctly.
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "2",
 		Resources: []types.Any{
 			any(t, cluster("default/kbujbkuh-c83ceb/8080/da39a3ee5e", "default/kbujbkuhdod66gjdmwmijz8xzgsx1nkfbrloezdjiulquzk4x3p0nnvpzi8r", "default_kbujbkuhdod66gjdmwmijz8xzgsx1nkfbrloezdjiulquzk4x3p0nnvpzi8r_8080")),
 		},
 		TypeUrl: clusterType,
-		Nonce:   "0",
+		Nonce:   "2",
 	}, streamCDS(t, cc))
 }
 
@@ -125,12 +125,12 @@ func TestClusterAddUpdateDelete(t *testing.T) {
 	rh.OnAdd(s1)
 
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "3",
 		Resources: []types.Any{
 			any(t, cluster("default/kuard/80/da39a3ee5e", "default/kuard", "default_kuard_80")),
 		},
 		TypeUrl: clusterType,
-		Nonce:   "0",
+		Nonce:   "3",
 	}, streamCDS(t, cc))
 
 	// s2 is the same as s2, but the service port has a name
@@ -146,12 +146,12 @@ func TestClusterAddUpdateDelete(t *testing.T) {
 
 	// check that we get two CDS records because the port is now named.
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "4",
 		Resources: []types.Any{
 			any(t, cluster("default/kuard/80/da39a3ee5e", "default/kuard/http", "default_kuard_80")),
 		},
 		TypeUrl: clusterType,
-		Nonce:   "0",
+		Nonce:   "4",
 	}, streamCDS(t, cc))
 
 	// s3 is like s2, but has a second named port. The k8s spec
@@ -177,13 +177,13 @@ func TestClusterAddUpdateDelete(t *testing.T) {
 	// check that we get four CDS records. Order is important
 	// because the CDS cache is sorted.
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "5",
 		Resources: []types.Any{
 			any(t, cluster("default/kuard/443/da39a3ee5e", "default/kuard/https", "default_kuard_443")),
 			any(t, cluster("default/kuard/80/da39a3ee5e", "default/kuard/http", "default_kuard_80")),
 		},
 		TypeUrl: clusterType,
-		Nonce:   "0",
+		Nonce:   "5",
 	}, streamCDS(t, cc))
 
 	// s4 is s3 with the http port removed.
@@ -202,12 +202,12 @@ func TestClusterAddUpdateDelete(t *testing.T) {
 	// check that we get two CDS records only, and that the 80 and http
 	// records have been removed even though the service object remains.
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "6",
 		Resources: []types.Any{
 			any(t, cluster("default/kuard/443/da39a3ee5e", "default/kuard/https", "default_kuard_443")),
 		},
 		TypeUrl: clusterType,
-		Nonce:   "0",
+		Nonce:   "6",
 	}, streamCDS(t, cc))
 }
 
@@ -262,13 +262,13 @@ func TestClusterRenameUpdateDelete(t *testing.T) {
 
 	rh.OnAdd(s1)
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "2",
 		Resources: []types.Any{
 			any(t, cluster("default/kuard/443/da39a3ee5e", "default/kuard/https", "default_kuard_443")),
 			any(t, cluster("default/kuard/80/da39a3ee5e", "default/kuard/http", "default_kuard_80")),
 		},
 		TypeUrl: clusterType,
-		Nonce:   "0",
+		Nonce:   "2",
 	}, streamCDS(t, cc))
 
 	// s2 removes the name on port 80, moves it to port 443 and deletes the https port
@@ -282,33 +282,33 @@ func TestClusterRenameUpdateDelete(t *testing.T) {
 
 	rh.OnUpdate(s1, s2)
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "3",
 		Resources: []types.Any{
 			any(t, cluster("default/kuard/443/da39a3ee5e", "default/kuard", "default_kuard_443")),
 		},
 		TypeUrl: clusterType,
-		Nonce:   "0",
+		Nonce:   "3",
 	}, streamCDS(t, cc))
 
 	// now replace s2 with s1 to check it works in the other direction.
 	rh.OnUpdate(s2, s1)
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "4",
 		Resources: []types.Any{
 			any(t, cluster("default/kuard/443/da39a3ee5e", "default/kuard/https", "default_kuard_443")),
 			any(t, cluster("default/kuard/80/da39a3ee5e", "default/kuard/http", "default_kuard_80")),
 		},
 		TypeUrl: clusterType,
-		Nonce:   "0",
+		Nonce:   "4",
 	}, streamCDS(t, cc))
 
 	// cleanup and check
 	rh.OnDelete(s1)
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "5",
 		Resources:   []types.Any{},
 		TypeUrl:     clusterType,
-		Nonce:       "0",
+		Nonce:       "5",
 	}, streamCDS(t, cc))
 }
 
@@ -341,12 +341,12 @@ func TestIssue243(t *testing.T) {
 		)
 		rh.OnAdd(s1)
 		assertEqual(t, &v2.DiscoveryResponse{
-			VersionInfo: "0",
+			VersionInfo: "2",
 			Resources: []types.Any{
 				any(t, cluster("default/kuard/80/da39a3ee5e", "default/kuard", "default_kuard_80")),
 			},
 			TypeUrl: clusterType,
-			Nonce:   "0",
+			Nonce:   "2",
 		}, streamCDS(t, cc))
 	})
 }
@@ -384,12 +384,12 @@ func TestIssue247(t *testing.T) {
 	)
 	rh.OnAdd(s1)
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "2",
 		Resources: []types.Any{
 			any(t, cluster("default/kuard/80/da39a3ee5e", "default/kuard", "default_kuard_80")),
 		},
 		TypeUrl: clusterType,
-		Nonce:   "0",
+		Nonce:   "2",
 	}, streamCDS(t, cc))
 }
 func TestCDSResourceFiltering(t *testing.T) {
@@ -443,32 +443,32 @@ func TestCDSResourceFiltering(t *testing.T) {
 	)
 	rh.OnAdd(s2)
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "3",
 		Resources: []types.Any{
 			// note, resources are sorted by Cluster.Name
 			any(t, cluster("default/httpbin/8080/da39a3ee5e", "default/httpbin", "default_httpbin_8080")),
 			any(t, cluster("default/kuard/80/da39a3ee5e", "default/kuard", "default_kuard_80")),
 		},
 		TypeUrl: clusterType,
-		Nonce:   "0",
+		Nonce:   "3",
 	}, streamCDS(t, cc))
 
 	// assert we can filter on one resource
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "3",
 		Resources: []types.Any{
 			any(t, cluster("default/kuard/80/da39a3ee5e", "default/kuard", "default_kuard_80")),
 		},
 		TypeUrl: clusterType,
-		Nonce:   "0",
+		Nonce:   "3",
 	}, streamCDS(t, cc, "default/kuard/80/da39a3ee5e"))
 
 	// assert a non matching filter returns no results
 	// note: streamCDS would stall at this point.
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "3",
 		TypeUrl:     clusterType,
-		Nonce:       "0",
+		Nonce:       "3",
 	}, streamCDS(t, cc, "default/httpbin/9000"))
 }
 
@@ -509,7 +509,7 @@ func TestClusterCircuitbreakerAnnotations(t *testing.T) {
 
 	// check that it's been translated correctly.
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "2",
 		Resources: []types.Any{
 			any(t, &v2.Cluster{
 				Name:                 "default/kuard/8080/da39a3ee5e",
@@ -533,7 +533,7 @@ func TestClusterCircuitbreakerAnnotations(t *testing.T) {
 			}),
 		},
 		TypeUrl: clusterType,
-		Nonce:   "0",
+		Nonce:   "2",
 	}, streamCDS(t, cc))
 
 	// update s1 with slightly weird values
@@ -555,7 +555,7 @@ func TestClusterCircuitbreakerAnnotations(t *testing.T) {
 
 	// check that it's been translated correctly.
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "3",
 		Resources: []types.Any{
 			any(t, &v2.Cluster{
 				Name:                 "default/kuard/8080/da39a3ee5e",
@@ -576,7 +576,7 @@ func TestClusterCircuitbreakerAnnotations(t *testing.T) {
 			}),
 		},
 		TypeUrl: clusterType,
-		Nonce:   "0",
+		Nonce:   "3",
 	}, streamCDS(t, cc))
 }
 
@@ -626,12 +626,12 @@ func TestClusterPerServiceParameters(t *testing.T) {
 	})
 
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "2",
 		Resources: []types.Any{
 			any(t, cluster("default/kuard/80/da39a3ee5e", "default/kuard", "default_kuard_80")),
 		},
 		TypeUrl: clusterType,
-		Nonce:   "0",
+		Nonce:   "2",
 	}, streamCDS(t, cc))
 }
 
@@ -681,7 +681,7 @@ func TestClusterLoadBalancerStrategyPerRoute(t *testing.T) {
 	})
 
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "2",
 		Resources: []types.Any{
 			any(t, &v2.Cluster{
 				Name:                 "default/kuard/80/58d888c08a",
@@ -709,7 +709,7 @@ func TestClusterLoadBalancerStrategyPerRoute(t *testing.T) {
 			}),
 		},
 		TypeUrl: clusterType,
-		Nonce:   "0",
+		Nonce:   "2",
 	}, streamCDS(t, cc))
 }
 
@@ -753,12 +753,12 @@ func TestClusterWithHealthChecks(t *testing.T) {
 	})
 
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "2",
 		Resources: []types.Any{
 			any(t, clusterWithHealthCheck("default/kuard/80/bc862a33ca", "default/kuard", "default_kuard_80", "/healthz", true)),
 		},
 		TypeUrl: clusterType,
-		Nonce:   "0",
+		Nonce:   "2",
 	}, streamCDS(t, cc))
 }
 
@@ -801,15 +801,120 @@ func TestClusterServiceTLSBackend(t *testing.T) {
 	}
 	rh.OnAdd(s1)
 
-	want := tlscluster("default/kuard/443/da39a3ee5e", "default/kuard/securebackend", "default_kuard_443")
+	want := tlscluster("default/kuard/443/da39a3ee5e", "default/kuard/securebackend", "default_kuard_443", nil, "")
 
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "0",
+		VersionInfo: "2",
 		Resources: []types.Any{
 			any(t, want),
 		},
 		TypeUrl: clusterType,
-		Nonce:   "0",
+		Nonce:   "2",
+	}, streamCDS(t, cc))
+}
+
+func TestClusterServiceTLSBackendCAValidation(t *testing.T) {
+	rh, cc, done := setup(t)
+	defer done()
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"contour.heptio.com/upstream-protocol.tls": "securebackend,443",
+			},
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:       "securebackend",
+				Protocol:   "TCP",
+				Port:       443,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	secret := &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "foo",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			envoy.CACertificateKey: []byte("ca"),
+		},
+	}
+
+	rh.OnAdd(secret)
+
+	ir1 := &ingressroutev1.IngressRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: ingressroutev1.IngressRouteSpec{
+			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "www.example.com"},
+			Routes: []ingressroutev1.Route{{
+				Match: "/a",
+				Services: []ingressroutev1.Service{{
+					Name: "kuard",
+					Port: 443,
+				}},
+			}},
+		},
+	}
+
+	rh.OnAdd(ir1)
+
+	assertEqual(t, &v2.DiscoveryResponse{
+		VersionInfo: "3",
+		Resources: []types.Any{
+			any(t, tlscluster(
+				"default/kuard/443/da39a3ee5e",
+				"default/kuard/securebackend",
+				"default_kuard_443",
+				nil,
+				"")),
+		},
+		TypeUrl: clusterType,
+		Nonce:   "3",
+	}, streamCDS(t, cc))
+
+	ir2 := &ingressroutev1.IngressRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: ingressroutev1.IngressRouteSpec{
+			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "www.example.com"},
+			Routes: []ingressroutev1.Route{{
+				Match: "/a",
+				Services: []ingressroutev1.Service{{
+					Name: "kuard",
+					Port: 443,
+					UpstreamValidation: &ingressroutev1.UpstreamValidation{
+						CACertificate: "foo",
+						SubjectName:   "subjname",
+					},
+				}},
+			}},
+		},
+	}
+
+	rh.OnUpdate(ir1, ir2)
+
+	assertEqual(t, &v2.DiscoveryResponse{
+		VersionInfo: "4",
+		Resources: []types.Any{
+			any(t, tlscluster(
+				"default/kuard/443/98c0f31c72",
+				"default/kuard/securebackend",
+				"default_kuard_443",
+				[]byte("ca"),
+				"subjname")),
+		},
+		TypeUrl: clusterType,
+		Nonce:   "4",
 	}, streamCDS(t, cc))
 }
 
@@ -852,9 +957,9 @@ func cluster(name, servicename, statName string) *v2.Cluster {
 	}
 }
 
-func tlscluster(name, servicename, statsName string) *v2.Cluster {
+func tlscluster(name, servicename, statsName string, ca []byte, subjectName string) *v2.Cluster {
 	c := cluster(name, servicename, statsName)
-	c.TlsContext = envoy.UpstreamTLSContext()
+	c.TlsContext = envoy.UpstreamTLSContext(ca, subjectName)
 	return c
 }
 

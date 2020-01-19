@@ -18,49 +18,11 @@ import (
 	"math"
 	"reflect"
 	"testing"
-	"time"
 
 	"k8s.io/api/extensions/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
-
-func TestParseAnnotationTimeout(t *testing.T) {
-	tests := map[string]struct {
-		a    map[string]string
-		want time.Duration
-	}{
-		"nada": {
-			a:    nil,
-			want: 0,
-		},
-		"empty": {
-			a:    map[string]string{annotationRequestTimeout: ""}, // not even sure this is possible via the API
-			want: 0,
-		},
-		"infinity": {
-			a:    map[string]string{annotationRequestTimeout: "infinity"},
-			want: -1,
-		},
-		"10 seconds": {
-			a:    map[string]string{annotationRequestTimeout: "10s"},
-			want: 10 * time.Second,
-		},
-		"invalid": {
-			a:    map[string]string{annotationRequestTimeout: "10"}, // 10 what?
-			want: -1,
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			got := parseAnnotationTimeout(tc.a, annotationRequestTimeout)
-			if got != tc.want {
-				t.Fatalf("parseAnnotationTimeout(%q): want: %v, got: %v", tc.a, tc.want, got)
-			}
-		})
-	}
-}
 
 func TestParseAnnotationUInt32(t *testing.T) {
 	tests := map[string]struct {
@@ -127,6 +89,13 @@ func TestParseUpstreamProtocols(t *testing.T) {
 				"80": "h2",
 			},
 		},
+		"tls": {
+			a: map[string]string{fmt.Sprintf("%s.%s", annotationUpstreamProtocol, "tls"): "https,80"},
+			want: map[string]string{
+				"80":    "tls",
+				"https": "tls",
+			},
+		},
 		"multiple value": {
 			a: map[string]string{fmt.Sprintf("%s.%s", annotationUpstreamProtocol, "h2"): "80,http,443,https"},
 			want: map[string]string{
@@ -140,7 +109,7 @@ func TestParseUpstreamProtocols(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := parseUpstreamProtocols(tc.a, annotationUpstreamProtocol, "h2")
+			got := parseUpstreamProtocols(tc.a, annotationUpstreamProtocol, "h2", "tls")
 			if !reflect.DeepEqual(tc.want, got) {
 				t.Fatalf("parseUpstreamProtocols(%q): want: %v, got: %v", tc.a, tc.want, got)
 			}

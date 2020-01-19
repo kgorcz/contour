@@ -14,10 +14,10 @@ package envoy
 
 import (
 	"fmt"
+	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
 	"sort"
 	"time"
 
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/route"
 	"github.com/gogo/protobuf/types"
 	"github.com/heptio/contour/internal/dag"
@@ -26,7 +26,7 @@ import (
 // RouteRoute creates a route.Route_Route for the services supplied.
 // If len(services) is greater than one, the route's action will be a
 // weighted cluster.
-func RouteRoute(r *dag.Route, services []*dag.HTTPService) *route.Route_Route {
+func RouteRoute(r *dag.Route, clusters []*dag.Cluster) *route.Route_Route {
 	ra := route.RouteAction{
 		RetryPolicy:   retryPolicy(r),
 		Timeout:       timeout(r),
@@ -41,17 +41,14 @@ func RouteRoute(r *dag.Route, services []*dag.HTTPService) *route.Route_Route {
 		)
 	}
 
-	switch len(services) {
+	switch len(clusters) {
 	case 1:
 		ra.ClusterSpecifier = &route.RouteAction_Cluster{
-			Cluster: Clustername(&services[0].TCPService),
+			Cluster: Clustername(clusters[0]),
 		}
-		ra.RequestHeadersToAdd = headers(
-			appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%"),
-		)
 	default:
 		ra.ClusterSpecifier = &route.RouteAction_WeightedClusters{
-			WeightedClusters: weightedClusters(services),
+			WeightedClusters: weightedClusters(clusters),
 		}
 	}
 	return &route.Route_Route{
@@ -60,7 +57,11 @@ func RouteRoute(r *dag.Route, services []*dag.HTTPService) *route.Route_Route {
 }
 
 func timeout(r *dag.Route) *time.Duration {
-	switch r.Timeout {
+	if r.TimeoutPolicy == nil {
+		return nil
+	}
+
+	switch r.TimeoutPolicy.Timeout {
 	case 0:
 		// no timeout specified
 		return nil
@@ -69,22 +70,26 @@ func timeout(r *dag.Route) *time.Duration {
 		// envoy "infinite timeout"
 		return duration(0)
 	default:
-		return duration(r.Timeout)
+		return duration(r.TimeoutPolicy.Timeout)
 	}
 }
 
 func retryPolicy(r *dag.Route) *route.RetryPolicy {
-	if r.RetryOn == "" {
+	if r.RetryPolicy == nil {
 		return nil
 	}
+	if r.RetryPolicy.RetryOn == "" {
+		return nil
+	}
+
 	rp := &route.RetryPolicy{
-		RetryOn: r.RetryOn,
+		RetryOn: r.RetryPolicy.RetryOn,
 	}
-	if r.NumRetries > 0 {
-		rp.NumRetries = u32(r.NumRetries)
+	if r.RetryPolicy.NumRetries > 0 {
+		rp.NumRetries = u32(r.RetryPolicy.NumRetries)
 	}
-	if r.PerTryTimeout > 0 {
-		timeout := r.PerTryTimeout
+	if r.RetryPolicy.PerTryTimeout > 0 {
+		timeout := r.RetryPolicy.PerTryTimeout
 		rp.PerTryTimeout = &timeout
 	}
 	return rp
@@ -101,18 +106,22 @@ func UpgradeHTTPS() *route.Route_Redirect {
 	}
 }
 
+// RouteHeaders returns a list of headers to be applied at the Route level on envoy
+func RouteHeaders() []*core.HeaderValueOption {
+	return headers(
+		appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%"),
+	)
+}
+
 // weightedClusters returns a route.WeightedCluster for multiple services.
-func weightedClusters(services []*dag.HTTPService) *route.WeightedCluster {
+func weightedClusters(clusters []*dag.Cluster) *route.WeightedCluster {
 	var wc route.WeightedCluster
 	var total int
-	for _, service := range services {
-		total += service.Weight
+	for _, cluster := range clusters {
+		total += cluster.Weight
 		wc.Clusters = append(wc.Clusters, &route.WeightedCluster_ClusterWeight{
-			Name:   Clustername(&service.TCPService),
-			Weight: u32(service.Weight),
-			RequestHeadersToAdd: headers(
-				appendHeader("x-request-start", "t=%START_TIME(%s.%3f)%"),
-			),
+			Name:   Clustername(cluster),
+			Weight: u32(cluster.Weight),
 		})
 	}
 	// Check if no weights were defined, if not default to even distribution
@@ -120,7 +129,7 @@ func weightedClusters(services []*dag.HTTPService) *route.WeightedCluster {
 		for _, c := range wc.Clusters {
 			c.Weight.Value = 1
 		}
-		total = len(services)
+		total = len(clusters)
 	}
 	wc.TotalWeight = u32(total)
 

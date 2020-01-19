@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/envoyproxy/go-control-plane/pkg/cache"
 	clientset "github.com/heptio/contour/apis/generated/clientset/versioned"
 	contourinformers "github.com/heptio/contour/apis/generated/informers/externalversions"
 	"github.com/heptio/contour/internal/contour"
@@ -60,6 +61,9 @@ func main() {
 	bootstrap.Flag("statsd-address", "statsd address").StringVar(&config.StatsdAddress)
 	bootstrap.Flag("statsd-port", "statsd port").IntVar(&config.StatsdPort)
 
+	// Get the running namespace passed via ENV var from the Kubernetes Downward API
+	config.Namespace = getEnv("CONTOUR_NAMESPACE", "heptio-contour")
+
 	cli := app.Command("cli", "A CLI client for the Heptio Contour Kubernetes ingress controller.")
 	var client Client
 	cli.Flag("contour", "contour host:port.").Default("127.0.0.1:8001").StringVar(&client.ContourAddr)
@@ -73,6 +77,8 @@ func main() {
 	lds.Arg("resources", "LDS resource filter").StringsVar(&resources)
 	rds := cli.Command("rds", "watch routes.")
 	rds.Arg("resources", "RDS resource filter").StringsVar(&resources)
+	sds := cli.Command("sds", "watch secrets.")
+	sds.Arg("resources", "SDS resource filter").StringsVar(&resources)
 
 	serve := app.Command("serve", "Serve xDS API traffic")
 	inCluster := serve.Flag("incluster", "use in cluster configuration.").Bool()
@@ -143,16 +149,19 @@ func main() {
 		writeBootstrapConfig(&config, *path)
 	case cds.FullCommand():
 		stream := client.ClusterStream()
-		watchstream(stream, clusterType, resources)
+		watchstream(stream, cache.ClusterType, resources)
 	case eds.FullCommand():
 		stream := client.EndpointStream()
-		watchstream(stream, endpointType, resources)
+		watchstream(stream, cache.EndpointType, resources)
 	case lds.FullCommand():
 		stream := client.ListenerStream()
-		watchstream(stream, listenerType, resources)
+		watchstream(stream, cache.ListenerType, resources)
 	case rds.FullCommand():
 		stream := client.RouteStream()
-		watchstream(stream, routeType, resources)
+		watchstream(stream, cache.RouteType, resources)
+	case sds.FullCommand():
+		stream := client.RouteStream()
+		watchstream(stream, cache.SecretType, resources)
 	case serve.FullCommand():
 		log.Infof("args: %v", args)
 		var g workgroup.Group
@@ -163,6 +172,11 @@ func main() {
 		// this point to avoid the Go flag package from rejecting flags which are defined
 		// in kingpin. See #371
 		flag.Parse()
+		// Always let glog logs to stderr rather than files. Otherwise,
+		// once it attempts to log to files under /tmp, will crash the
+		// whole process since the path may not be accessible in
+		// container environment. See #959
+		_ = flag.Lookup("logtostderr").Value.Set("true")
 
 		reh.IngressRouteRootNamespaces = parseRootNamespaces(ingressrouteRootNamespaceFlag)
 
@@ -214,12 +228,14 @@ func main() {
 				clusterType  = typePrefix + "Cluster"
 				routeType    = typePrefix + "RouteConfiguration"
 				listenerType = typePrefix + "Listener"
+				secretType   = typePrefix + "auth.Secret"
 			)
 			s := grpc.NewAPI(log, map[string]grpc.Cache{
 				clusterType:  &ch.ClusterCache,
 				routeType:    &ch.RouteCache,
 				listenerType: &ch.ListenerCache,
 				endpointType: et,
+				secretType:   &ch.SecretCache,
 			})
 			log.Println("started")
 			defer log.Println("stopped")
@@ -284,4 +300,12 @@ func parseRootNamespaces(rn string) []string {
 		ns = append(ns, strings.TrimSpace(s))
 	}
 	return ns
+}
+
+func getEnv(key, fallback string) string {
+	value, exists := os.LookupEnv(key)
+	if !exists {
+		value = fallback
+	}
+	return value
 }

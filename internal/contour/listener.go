@@ -24,7 +24,6 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/heptio/contour/internal/dag"
 	"github.com/heptio/contour/internal/envoy"
-	v1 "k8s.io/api/core/v1"
 )
 
 const (
@@ -266,11 +265,8 @@ func (v *listenerVisitor) visit(vertex dag.Vertex) {
 			alpnProtos = nil // do not offer ALPN
 
 			// attach certificate data to this listener if provided.
-			if vh.Secret != nil {
-				data := vh.Secret.Data()
-				if len(data[v1.TLSCertKey]) != 0 && len(data[v1.TLSPrivateKeyKey]) != 0 {
-					fc.TlsContext = envoy.DownstreamTLSContext(data[v1.TLSCertKey], data[v1.TLSPrivateKeyKey], vh.MinProtoVersion, alpnProtos...)
-				}
+			if vh.Secret != nil && len(vh.Secret.Cert()) > 0 && len(vh.Secret.PrivateKey()) > 0 {
+				fc.TlsContext = envoy.DownstreamTLSContext(vh.Secret.Name(), vh.MinProtoVersion, alpnProtos...)
 			}
 
 			v.listeners[name] = &v2.Listener{
@@ -294,11 +290,8 @@ func (v *listenerVisitor) visit(vertex dag.Vertex) {
 		}
 
 		// attach certificate data to this listener if provided.
-		if vh.Secret != nil {
-			data := vh.Secret.Data()
-			if len(data[v1.TLSCertKey]) != 0 && len(data[v1.TLSPrivateKeyKey]) != 0 {
-				fc.TlsContext = envoy.DownstreamTLSContext(data[v1.TLSCertKey], data[v1.TLSPrivateKeyKey], vh.MinProtoVersion, alpnProtos...)
-			}
+		if vh.Secret != nil && len(vh.Secret.Cert()) > 0 && len(vh.Secret.PrivateKey()) > 0 {
+			fc.TlsContext = envoy.DownstreamTLSContext(vh.Secret.Name(), vh.MinProtoVersion, alpnProtos...)
 		}
 
 		v.listeners[ENVOY_HTTPS_LISTENER].FilterChains = append(v.listeners[ENVOY_HTTPS_LISTENER].FilterChains, fc)

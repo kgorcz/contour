@@ -148,26 +148,39 @@ func TestSocketAddress(t *testing.T) {
 }
 
 func TestDownstreamTLSContext(t *testing.T) {
-	const (
-		cert = "foo"
-		key  = "secret"
-	)
-	got := DownstreamTLSContext([]byte(cert), []byte(key), auth.TlsParameters_TLSv1_1, "h2", "http/1.1")
+	const secretName = "default/tls-cert"
+
+	got := DownstreamTLSContext(secretName, auth.TlsParameters_TLSv1_1, "h2", "http/1.1")
 	want := &auth.DownstreamTlsContext{
 		CommonTlsContext: &auth.CommonTlsContext{
 			TlsParams: &auth.TlsParameters{
 				TlsMinimumProtocolVersion: auth.TlsParameters_TLSv1_1,
 				TlsMaximumProtocolVersion: auth.TlsParameters_TLSv1_3,
-			},
-			TlsCertificates: []*auth.TlsCertificate{{
-				CertificateChain: &core.DataSource{
-					Specifier: &core.DataSource_InlineBytes{
-						InlineBytes: []byte(cert),
-					},
+				CipherSuites: []string{
+					"[ECDHE-ECDSA-AES128-GCM-SHA256|ECDHE-ECDSA-CHACHA20-POLY1305]",
+					"[ECDHE-RSA-AES128-GCM-SHA256|ECDHE-RSA-CHACHA20-POLY1305]",
+					"ECDHE-ECDSA-AES128-SHA",
+					"ECDHE-RSA-AES128-SHA",
+					"ECDHE-ECDSA-AES256-GCM-SHA384",
+					"ECDHE-RSA-AES256-GCM-SHA384",
+					"ECDHE-ECDSA-AES256-SHA",
+					"ECDHE-RSA-AES256-SHA",
 				},
-				PrivateKey: &core.DataSource{
-					Specifier: &core.DataSource_InlineBytes{
-						InlineBytes: []byte(key),
+			},
+			TlsCertificateSdsSecretConfigs: []*auth.SdsSecretConfig{{
+				Name: secretName,
+				SdsConfig: &core.ConfigSource{
+					ConfigSourceSpecifier: &core.ConfigSource_ApiConfigSource{
+						ApiConfigSource: &core.ApiConfigSource{
+							ApiType: core.ApiConfigSource_GRPC,
+							GrpcServices: []*core.GrpcService{{
+								TargetSpecifier: &core.GrpcService_EnvoyGrpc_{
+									EnvoyGrpc: &core.GrpcService_EnvoyGrpc{
+										ClusterName: "contour",
+									},
+								},
+							}},
+						},
 					},
 				},
 			}},
@@ -185,22 +198,26 @@ func TestTCPProxy(t *testing.T) {
 		accessLogPath = "/dev/stdout"
 	)
 
-	s1 := &dag.TCPService{
-		Name:      "example",
-		Namespace: "default",
-		ServicePort: &v1.ServicePort{
-			Protocol:   "TCP",
-			Port:       443,
-			TargetPort: intstr.FromInt(8443),
+	c1 := &dag.Cluster{
+		Upstream: &dag.TCPService{
+			Name:      "example",
+			Namespace: "default",
+			ServicePort: &v1.ServicePort{
+				Protocol:   "TCP",
+				Port:       443,
+				TargetPort: intstr.FromInt(8443),
+			},
 		},
 	}
-	s2 := &dag.TCPService{
-		Name:      "example2",
-		Namespace: "default",
-		ServicePort: &v1.ServicePort{
-			Protocol:   "TCP",
-			Port:       443,
-			TargetPort: intstr.FromInt(8443),
+	c2 := &dag.Cluster{
+		Upstream: &dag.TCPService{
+			Name:      "example2",
+			Namespace: "default",
+			ServicePort: &v1.ServicePort{
+				Protocol:   "TCP",
+				Port:       443,
+				TargetPort: intstr.FromInt(8443),
+			},
 		},
 		Weight: 20,
 	}
@@ -211,9 +228,7 @@ func TestTCPProxy(t *testing.T) {
 	}{
 		"single cluster": {
 			proxy: &dag.TCPProxy{
-				Services: []*dag.TCPService{
-					s1,
-				},
+				Clusters: []*dag.Cluster{c1},
 			},
 			want: listener.Filter{
 				Name: util.TCPProxy,
@@ -221,7 +236,7 @@ func TestTCPProxy(t *testing.T) {
 					Config: messageToStruct(&envoy_config_v2_tcpproxy.TcpProxy{
 						StatPrefix: statPrefix,
 						ClusterSpecifier: &envoy_config_v2_tcpproxy.TcpProxy_Cluster{
-							Cluster: Clustername(s1),
+							Cluster: Clustername(c1),
 						},
 						AccessLog: []*envoy_accesslog.AccessLog{{
 							Name: util.FileAccessLog,
@@ -235,9 +250,7 @@ func TestTCPProxy(t *testing.T) {
 		},
 		"multiple cluster": {
 			proxy: &dag.TCPProxy{
-				Services: []*dag.TCPService{
-					s2, s1, // assert that these are sorted
-				},
+				Clusters: []*dag.Cluster{c2, c1},
 			},
 			want: listener.Filter{
 				Name: util.TCPProxy,
@@ -247,10 +260,10 @@ func TestTCPProxy(t *testing.T) {
 						ClusterSpecifier: &envoy_config_v2_tcpproxy.TcpProxy_WeightedClusters{
 							WeightedClusters: &envoy_config_v2_tcpproxy.TcpProxy_WeightedCluster{
 								Clusters: []*envoy_config_v2_tcpproxy.TcpProxy_WeightedCluster_ClusterWeight{{
-									Name:   Clustername(s1),
+									Name:   Clustername(c1),
 									Weight: 1,
 								}, {
-									Name:   Clustername(s2),
+									Name:   Clustername(c2),
 									Weight: 20,
 								}},
 							},

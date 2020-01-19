@@ -2,7 +2,7 @@ PROJECT = contour
 REGISTRY ?= gcr.io/heptio-images
 IMAGE := $(REGISTRY)/$(PROJECT)
 SRCDIRS := ./cmd ./internal ./apis
-PKGS := $(shell go list ./cmd/... ./internal/...)
+PKGS := $(shell GO111MODULE=on go list -mod=readonly ./cmd/... ./internal/...)
 LOCAL_BOOTSTRAP_CONFIG = config.yaml
 TAG_LATEST ?= false
 
@@ -12,20 +12,20 @@ VERSION ?= $(GIT_REF)
 export GO111MODULE=on
 
 test: install
-	go test ./...
+	go test -mod=readonly ./...
 
 test-race: | test
-	go test -race ./...
+	go test -race -mod=readonly ./...
 
 vet: | test
 	go vet ./...
 
-check: test test-race vet gofmt misspell unconvert ineffassign
+check: test test-race vet gofmt staticcheck misspell unconvert ineffassign
 	@echo Checking rendered files are up to date
 	@(cd deployment && bash render.sh && git diff --exit-code . || (echo "rendered files are out of date" && exit 1))
 
 install:
-	go install -v -tags "oidc gcp" ./...
+	go install -mod=readonly -v -tags "oidc gcp" ./...
 
 download:
 	go mod download
@@ -56,13 +56,13 @@ local: $(LOCAL_BOOTSTRAP_CONFIG)
 		--service-cluster cluster0
 
 staticcheck:
-	@go get honnef.co/go/tools/cmd/staticcheck
+	go install honnef.co/go/tools/cmd/staticcheck
 	staticcheck \
 		-checks all,-ST1003 \
 		$(PKGS)
 
 misspell:
-	@go get github.com/client9/misspell/cmd/misspell
+	go install github.com/client9/misspell/cmd/misspell
 	misspell \
 		-i clas \
 		-locale US \
@@ -70,21 +70,21 @@ misspell:
 		cmd/* internal/* docs/* design/* *.md
 
 unconvert:
-	@go get github.com/mdempsky/unconvert
+	go install github.com/mdempsky/unconvert
 	unconvert -v $(PKGS)
 
 ineffassign:
-	@go get github.com/gordonklaus/ineffassign
+	go install github.com/gordonklaus/ineffassign
 	find $(SRCDIRS) -name '*.go' | xargs ineffassign
 
 pedantic: check unparam errcheck
 
 unparam:
-	@go get mvdan.cc/unparam
+	go install mvdan.cc/unparam
 	unparam ./...
 
 errcheck:
-	@go get github.com/kisielk/errcheck
+	go install github.com/kisielk/errcheck
 	errcheck $(PKGS)
 
 render:

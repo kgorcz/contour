@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
+	"github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	envoy_cluster "github.com/envoyproxy/go-control-plane/envoy/api/v2/cluster"
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type"
@@ -29,36 +29,56 @@ import (
 	"github.com/heptio/contour/internal/dag"
 )
 
-// Cluster creates new v2.Cluster from service.
-func Cluster(s dag.Service) *v2.Cluster {
-	switch s := s.(type) {
+// CACertificateKey stores the key for the TLS validation secret cert
+const CACertificateKey = "ca.crt"
+
+// Cluster creates new v2.Cluster from dag.Cluster.
+func Cluster(c *dag.Cluster) *v2.Cluster {
+	switch upstream := c.Upstream.(type) {
 	case *dag.HTTPService:
-		return httpCluster(s)
+		cl := cluster(c, &upstream.TCPService)
+		switch upstream.Protocol {
+		case "tls":
+			cl.TlsContext = UpstreamTLSContext(
+				upstreamValidationCACert(c),
+				upstreamValidationSubjectAltName(c),
+			)
+		case "h2":
+			cl.TlsContext = UpstreamTLSContext(
+				upstreamValidationCACert(c),
+				upstreamValidationSubjectAltName(c),
+				"h2")
+			fallthrough
+		case "h2c":
+			cl.Http2ProtocolOptions = &core.Http2ProtocolOptions{}
+		}
+		return cl
 	case *dag.TCPService:
-		return cluster(s)
+		return cluster(c, upstream)
 	default:
-		panic(fmt.Sprintf("unsupported Service: %T", s))
+		panic(fmt.Sprintf("unsupported upstream type: %T", upstream))
 	}
 }
 
-func httpCluster(service *dag.HTTPService) *v2.Cluster {
-	c := cluster(&service.TCPService)
-
-	switch service.Protocol {
-	case "tls":
-		c.TlsContext = UpstreamTLSContext()
-	case "h2":
-		c.TlsContext = UpstreamTLSContext("h2")
-		fallthrough
-	case "h2c":
-		c.Http2ProtocolOptions = &core.Http2ProtocolOptions{}
+func upstreamValidationCACert(c *dag.Cluster) []byte {
+	if c.UpstreamValidation == nil {
+		// No validation required
+		return nil
 	}
-	return c
+	return c.UpstreamValidation.CACertificate.Object.Data[CACertificateKey]
 }
 
-func cluster(service *dag.TCPService) *v2.Cluster {
+func upstreamValidationSubjectAltName(c *dag.Cluster) string {
+	if c.UpstreamValidation == nil {
+		// No validation required
+		return ""
+	}
+	return c.UpstreamValidation.SubjectName
+}
+
+func cluster(cluster *dag.Cluster, service *dag.TCPService) *v2.Cluster {
 	c := &v2.Cluster{
-		Name:                 Clustername(service),
+		Name:                 Clustername(cluster),
 		AltStatName:          altStatName(service),
 		ClusterDiscoveryType: ClusterDiscoveryType(v2.Cluster_EDS),
 		EdsClusterConfig:     edsconfig("contour", service),
@@ -126,7 +146,16 @@ func edshealthcheck(s *dag.TCPService) []*core.HealthCheck {
 }
 
 // Clustername returns the name of the CDS cluster for this service.
-func Clustername(service *dag.TCPService) string {
+func Clustername(cluster *dag.Cluster) string {
+	var service *dag.TCPService
+	switch s := cluster.Upstream.(type) {
+	case *dag.HTTPService:
+		service = &s.TCPService
+	case *dag.TCPService:
+		service = s
+	default:
+		panic(fmt.Sprintf("unsupported upstream type: %T", s))
+	}
 	buf := service.LoadBalancerStrategy
 	if hc := service.HealthCheck; hc != nil {
 		if hc.TimeoutSeconds > 0 {
@@ -142,6 +171,10 @@ func Clustername(service *dag.TCPService) string {
 			buf += strconv.Itoa(int(hc.HealthyThresholdCount))
 		}
 		buf += hc.Path
+	}
+	if uv := cluster.UpstreamValidation; uv != nil {
+		buf += uv.CACertificate.Object.ObjectMeta.Name
+		buf += uv.SubjectName
 	}
 
 	hash := sha1.Sum([]byte(buf))

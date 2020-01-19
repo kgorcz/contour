@@ -273,6 +273,47 @@ spec:
           permitInsecure: true
 ```
 
+#### Upstream TLS
+
+An IngressRoute route can proxy to an upstream TLS connection by first annotating the upstream Kubernetes service with: `contour.heptio.com/upstream-protocol.tls: "443,https"`.
+This annoation tells Contour which port should be used for the TLS connection.
+In this example, the upstream service is named `https` and uses port `443`.
+Additionally, it is possible for Envoy to verify the backend service's certificate.
+The service of an `IngressRoute` can optionally specify a `validation` struct which has a manditory `caSecret` key as well as an manditory `subjectName`.
+
+Note: If spec.routes.services[].validation is present, spec.routes.services[].{name,port} must point to a service with a matching contour.heptio.com/upstream-protocol.tls Service annotation.
+
+##### Sample YAML
+
+```yaml
+apiVersion: contour.heptio.com/v1beta1
+kind: IngressRoute
+metadata:
+  name: secure-backend
+spec:
+  virtualhost:
+    fqdn: www.example.com  
+  routes:
+    - match: /
+      services:
+        - name: service
+          port: 8443
+          validation:
+            caSecret: my-certificate-authority
+            subjectName: backend.example.com
+```
+
+##### Error conditions
+
+If the `validation` spec is defined on a service, but the secret which it references does not exist, Contour will rejct the update and set the status of the `IngressRoute` object accordingly.
+This is to help prevent the case of proxying to an upstream where validation is requested, but not yet available.
+
+```yaml
+Status:
+  Current Status:  invalid
+  Description:     route "/": service "tls-nginx": upstreamValidation requested but secret not found or misconfigured
+```
+
 #### TLS Certificate Delegation
 
 In order to support wildcard certificates, TLS certificates for a `*.somedomain.com`, which are stored in a namespace controlled by the cluster administrator, Contour supports a facility known as TLS Certificate Delegation.
@@ -400,6 +441,46 @@ IngressRoute weighting follows some specific rules:
 - If no weights are specified for a given route, it's assumed even distribution across the Services.
 - Weights are relative and do not need to add up to 100. If all weights for a route are specified, then the "total" weight is the sum of those specified. As an example, if weights are 20, 30, 20 for three upstreams, the total weight would be 70. In this example, a weight of 30 would receive approximately 42.9% of traffic (30/70 = .4285).
 - If some weights are specified but others are not, then it's assumed that upstreams without weights have an implicit weight of zero, and thus will not receive traffic.
+
+#### Request Timeout
+
+Each Route can be configured to have a timeout policy and a retry policy as shown:
+
+```yaml
+# request-timeout.ingressroute.yaml
+apiVersion: contour.heptio.com/v1beta1
+kind: IngressRoute
+metadata:
+  name: request-timeout
+  namespace: default
+spec:
+  virtualhost:
+    fqdn: timeout.bar.com
+  routes:
+  - match: /
+    timeoutPolicy:
+      request: 1s
+    retryPolicy:
+      count: 3
+      perTryTimeout: 150ms
+    services:
+    - name: s1
+      port: 80
+``` 
+
+In this example, requests to `timeout.bar.com/` will have a request timeout policy of 1s. 
+This refers to the time that spans between the point at which complete client request has been processed by the proxy, and when the response from the server has been completely processed. 
+
+- `timeoutPolicy.request` This field can be any positive time period or "infinity". 
+The time period of **0s** will also be treated as infinity. 
+By default, Envoy has a 15 second timeout for a backend service to respond.
+More information can be found in [Envoy's documentation](https://www.envoyproxy.io/docs/envoy/latest/api-v2/api/v2/route/route.proto.html#envoy-api-field-route-routeaction-timeout).
+
+- `retryPolicy`: A retry will be attempted if the server returns an error code in the 5xx range, or if the server takes more than `retryPolicy.perTryTimeout` to process a request. 
+    - `retryPolicy.count` specifies the maximum number of retries allowed. This parameter is optional and defaults to 1.
+    - `retryPolicy.perTryTimeout` specifies the timeout per retry. If this field is greater than the request timeout, it is ignored. This parameter is optional. 
+    If left unspecified, `timeoutPolicy.request` will be used. 
+
 
 #### Load Balancing Strategy
 
