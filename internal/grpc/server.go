@@ -14,61 +14,46 @@ package grpc
 
 import (
 	"context"
-	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/grpc-ecosystem/go-grpc-prometheus"
+	"github.com/prometheus/client_golang/prometheus"
+
 	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v2"
 	loadstats "github.com/envoyproxy/go-control-plane/envoy/service/load_stats/v2"
 	"github.com/sirupsen/logrus"
-	"google.golang.org/grpc/keepalive"
-)
-
-const (
-	// somewhat arbitrary limit to handle many, many, EDS streams
-	grpcMaxConcurrentStreams = 1 << 20
 )
 
 // NewAPI returns a *grpc.Server which responds to the Envoy v2 xDS gRPC API.
-func NewAPI(log logrus.FieldLogger, resources map[string]Resource) *grpc.Server {
-	opts := []grpc.ServerOption{
-		// By default the Go grpc library defaults to a value of ~100 streams per
-		// connection. This number is likely derived from the HTTP/2 spec:
-		// https://http2.github.io/http2-spec/#SettingValues
-		// We need to raise this value because Envoy will open one EDS stream per
-		// CDS entry. There doesn't seem to be a penalty for increasing this value,
-		// so set it the limit similar to envoyproxy/go-control-plane#70.
-		grpc.MaxConcurrentStreams(grpcMaxConcurrentStreams),
-		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
-			PermitWithoutStream: true,
-		}),
-		grpc.KeepaliveParams(keepalive.ServerParameters{
-			Time:    60 * time.Second,
-			Timeout: 20 * time.Second,
-		}),
-	}
-	g := grpc.NewServer(opts...)
+func NewAPI(log logrus.FieldLogger, resources map[string]Resource, registry *prometheus.Registry, opts ...grpc.ServerOption) *grpc.Server {
 	s := &grpcServer{
 		xdsHandler{
 			FieldLogger: log,
 			resources:   resources,
 		},
+		grpc_prometheus.NewServerMetrics(),
 	}
-
+	registry.MustRegister(s.metrics)
+	opts = append(opts, grpc.StreamInterceptor(s.metrics.StreamServerInterceptor()),
+		grpc.UnaryInterceptor(s.metrics.UnaryServerInterceptor()))
+	g := grpc.NewServer(opts...)
 	v2.RegisterClusterDiscoveryServiceServer(g, s)
 	v2.RegisterEndpointDiscoveryServiceServer(g, s)
 	v2.RegisterListenerDiscoveryServiceServer(g, s)
 	v2.RegisterRouteDiscoveryServiceServer(g, s)
 	discovery.RegisterSecretDiscoveryServiceServer(g, s)
+	s.metrics.InitializeMetrics(g)
 	return g
 }
 
 // grpcServer implements the LDS, RDS, CDS, and EDS, gRPC endpoints.
 type grpcServer struct {
 	xdsHandler
+	metrics *grpc_prometheus.ServerMetrics
 }
 
 func (s *grpcServer) FetchClusters(_ context.Context, req *v2.DiscoveryRequest) (*v2.DiscoveryResponse, error) {

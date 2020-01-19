@@ -1,4 +1,4 @@
-// Copyright © 2018 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/heptio/contour/internal/certgen"
+	"github.com/projectcontour/contour/internal/certgen"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 	"k8s.io/client-go/kubernetes"
 )
@@ -34,7 +34,7 @@ func registerCertGen(app *kingpin.Application) (*kingpin.CmdClause, *certgenConf
 	certgenApp.Flag("pem", "Render the generated certs as individual PEM files to the current directory").BoolVar(&certgenConfig.OutputPEM)
 	certgenApp.Flag("incluster", "use in cluster configuration.").BoolVar(&certgenConfig.InCluster)
 	certgenApp.Flag("kubeconfig", "path to kubeconfig (if not in running inside a cluster)").Default(filepath.Join(os.Getenv("HOME"), ".kube", "config")).StringVar(&certgenConfig.KubeConfig)
-	certgenApp.Flag("namespace", "Kubernetes namespace, used for Kube objects").Default("heptio-contour").Envar("CONTOUR_NAMESPACE").StringVar(&certgenConfig.Namespace)
+	certgenApp.Flag("namespace", "Kubernetes namespace, used for Kube objects").Default("projectcontour").Envar("CONTOUR_NAMESPACE").StringVar(&certgenConfig.Namespace)
 	certgenApp.Arg("outputdir", "Directory to output any files to").Default("certs").StringVar(&certgenConfig.OutputDir)
 
 	return certgenApp, &certgenConfig

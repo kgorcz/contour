@@ -1,4 +1,4 @@
-// Copyright © 2018 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,30 +17,30 @@ import (
 	"testing"
 	"time"
 
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
+	envoy_api_v2_core "github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
 	"github.com/google/go-cmp/cmp"
-	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
-	"github.com/heptio/contour/internal/dag"
+	"github.com/projectcontour/contour/internal/dag"
+	"github.com/projectcontour/contour/internal/protobuf"
 )
 
 func TestHealthCheck(t *testing.T) {
 	tests := map[string]struct {
 		cluster *dag.Cluster
-		want    *core.HealthCheck
+		want    *envoy_api_v2_core.HealthCheck
 	}{
 		// this is an odd case because contour.edshealthcheck will not call envoy.HealthCheck
 		// when hc is nil, so if hc is not nil, at least one of the parameters on it must be set.
 		"blank healthcheck": {
 			cluster: &dag.Cluster{
-				HealthCheck: new(ingressroutev1.HealthCheck),
+				HealthCheckPolicy: new(dag.HealthCheckPolicy),
 			},
-			want: &core.HealthCheck{
-				Timeout:            duration(hcTimeout),
-				Interval:           duration(hcInterval),
-				UnhealthyThreshold: u32(3),
-				HealthyThreshold:   u32(2),
-				HealthChecker: &core.HealthCheck_HttpHealthCheck_{
-					HttpHealthCheck: &core.HealthCheck_HttpHealthCheck{
+			want: &envoy_api_v2_core.HealthCheck{
+				Timeout:            protobuf.Duration(hcTimeout),
+				Interval:           protobuf.Duration(hcInterval),
+				UnhealthyThreshold: protobuf.UInt32(3),
+				HealthyThreshold:   protobuf.UInt32(2),
+				HealthChecker: &envoy_api_v2_core.HealthCheck_HttpHealthCheck_{
+					HttpHealthCheck: &envoy_api_v2_core.HealthCheck_HttpHealthCheck{
 						// TODO(dfc) this doesn't seem right
 						Host: "contour-envoy-healthcheck",
 					},
@@ -49,17 +49,17 @@ func TestHealthCheck(t *testing.T) {
 		},
 		"healthcheck path only": {
 			cluster: &dag.Cluster{
-				HealthCheck: &ingressroutev1.HealthCheck{
+				HealthCheckPolicy: &dag.HealthCheckPolicy{
 					Path: "/healthy",
 				},
 			},
-			want: &core.HealthCheck{
-				Timeout:            duration(hcTimeout),
-				Interval:           duration(hcInterval),
-				UnhealthyThreshold: u32(3),
-				HealthyThreshold:   u32(2),
-				HealthChecker: &core.HealthCheck_HttpHealthCheck_{
-					HttpHealthCheck: &core.HealthCheck_HttpHealthCheck{
+			want: &envoy_api_v2_core.HealthCheck{
+				Timeout:            protobuf.Duration(hcTimeout),
+				Interval:           protobuf.Duration(hcInterval),
+				UnhealthyThreshold: protobuf.UInt32(3),
+				HealthyThreshold:   protobuf.UInt32(2),
+				HealthChecker: &envoy_api_v2_core.HealthCheck_HttpHealthCheck_{
+					HttpHealthCheck: &envoy_api_v2_core.HealthCheck_HttpHealthCheck{
 						Path: "/healthy",
 						Host: "contour-envoy-healthcheck",
 					},
@@ -68,22 +68,22 @@ func TestHealthCheck(t *testing.T) {
 		},
 		"explicit healthcheck": {
 			cluster: &dag.Cluster{
-				HealthCheck: &ingressroutev1.HealthCheck{
-					Host:                    "foo-bar-host",
-					Path:                    "/healthy",
-					TimeoutSeconds:          99,
-					IntervalSeconds:         98,
-					UnhealthyThresholdCount: 97,
-					HealthyThresholdCount:   96,
+				HealthCheckPolicy: &dag.HealthCheckPolicy{
+					Host:               "foo-bar-host",
+					Path:               "/healthy",
+					Timeout:            99 * time.Second,
+					Interval:           98 * time.Second,
+					UnhealthyThreshold: 97,
+					HealthyThreshold:   96,
 				},
 			},
-			want: &core.HealthCheck{
-				Timeout:            duration(99 * time.Second),
-				Interval:           duration(98 * time.Second),
-				UnhealthyThreshold: u32(97),
-				HealthyThreshold:   u32(96),
-				HealthChecker: &core.HealthCheck_HttpHealthCheck_{
-					HttpHealthCheck: &core.HealthCheck_HttpHealthCheck{
+			want: &envoy_api_v2_core.HealthCheck{
+				Timeout:            protobuf.Duration(99 * time.Second),
+				Interval:           protobuf.Duration(98 * time.Second),
+				UnhealthyThreshold: protobuf.UInt32(97),
+				HealthyThreshold:   protobuf.UInt32(96),
+				HealthChecker: &envoy_api_v2_core.HealthCheck_HttpHealthCheck_{
+					HttpHealthCheck: &envoy_api_v2_core.HealthCheck_HttpHealthCheck{
 						Path: "/healthy",
 						Host: "foo-bar-host",
 					},

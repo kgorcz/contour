@@ -1,4 +1,4 @@
-// Copyright © 2018 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -19,9 +19,9 @@ import (
 	"strconv"
 	"sync/atomic"
 
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2"
-	"github.com/gogo/protobuf/proto"
-	"github.com/gogo/protobuf/types"
+	envoy_api_v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
+	"github.com/golang/protobuf/proto"
+	"github.com/golang/protobuf/ptypes/any"
 	"github.com/sirupsen/logrus"
 )
 
@@ -35,7 +35,7 @@ type Resource interface {
 	Query(names []string) []proto.Message
 
 	// Register registers ch to receive a value when Notify is called.
-	Register(chan int, int)
+	Register(chan int, int, ...string)
 
 	// TypeURL returns the typeURL of messages returned from Values.
 	TypeURL() string
@@ -50,8 +50,8 @@ type xdsHandler struct {
 
 type grpcStream interface {
 	Context() context.Context
-	Send(*v2.DiscoveryResponse) error
-	Recv() (*v2.DiscoveryRequest, error)
+	Send(*envoy_api_v2.DiscoveryResponse) error
+	Recv() (*envoy_api_v2.DiscoveryRequest, error)
 }
 
 // stream processes a stream of DiscoveryRequests.
@@ -109,7 +109,7 @@ func (xh *xdsHandler) stream(st grpcStream) (err error) {
 
 		// now we wait for a notification, if this is the first request received on this
 		// connection last will be less than zero and that will trigger a response immediately.
-		r.Register(ch, last)
+		r.Register(ch, last, req.ResourceNames...)
 		select {
 		case last = <-ch:
 			// boom, something in the cache has changed.
@@ -132,7 +132,7 @@ func (xh *xdsHandler) stream(st grpcStream) (err error) {
 				return err
 			}
 
-			resp := &v2.DiscoveryResponse{
+			resp := &envoy_api_v2.DiscoveryResponse{
 				VersionInfo: strconv.Itoa(last),
 				Resources:   any,
 				TypeUrl:     r.TypeURL(),
@@ -149,15 +149,15 @@ func (xh *xdsHandler) stream(st grpcStream) (err error) {
 }
 
 // toAny converts the contents of a resourcer's Values to the
-// respective slice of types.Any.
-func toAny(typeURL string, values []proto.Message) ([]types.Any, error) {
-	var resources []types.Any
+// respective slice of *any.Any.
+func toAny(typeURL string, values []proto.Message) ([]*any.Any, error) {
+	var resources []*any.Any
 	for _, value := range values {
 		v, err := proto.Marshal(value)
 		if err != nil {
 			return nil, err
 		}
-		resources = append(resources, types.Any{TypeUrl: typeURL, Value: v})
+		resources = append(resources, &any.Any{TypeUrl: typeURL, Value: v})
 	}
 	return resources, nil
 }

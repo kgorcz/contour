@@ -1,4 +1,4 @@
-// Copyright © 2019 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,41 +15,32 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
-	"errors"
-	"io/ioutil"
-	"log"
+	"fmt"
 	"net"
 	"os"
-	"path/filepath"
+	"os/signal"
 	"reflect"
 	"strconv"
-	"strings"
+	"syscall"
 	"time"
 
-	"github.com/google/uuid"
-	contourinformers "github.com/heptio/contour/apis/generated/informers/externalversions"
-	"github.com/heptio/contour/internal/contour"
-	"github.com/heptio/contour/internal/dag"
-	"github.com/heptio/contour/internal/debug"
-	"github.com/heptio/contour/internal/grpc"
-	"github.com/heptio/contour/internal/httpsvc"
-	"github.com/heptio/contour/internal/k8s"
-	"github.com/heptio/contour/internal/metrics"
-	"github.com/heptio/contour/internal/workgroup"
+	"k8s.io/client-go/tools/cache"
+
+	contourinformers "github.com/projectcontour/contour/apis/generated/informers/externalversions"
+	"github.com/projectcontour/contour/internal/contour"
+	"github.com/projectcontour/contour/internal/dag"
+	"github.com/projectcontour/contour/internal/debug"
+	cgrpc "github.com/projectcontour/contour/internal/grpc"
+	"github.com/projectcontour/contour/internal/httpsvc"
+	"github.com/projectcontour/contour/internal/k8s"
+	"github.com/projectcontour/contour/internal/metrics"
+	"github.com/projectcontour/contour/internal/workgroup"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/alecthomas/kingpin.v2"
 	"gopkg.in/yaml.v2"
-	coreV1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	coreinformers "k8s.io/client-go/informers"
-	clientcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/leaderelection"
-	"k8s.io/client-go/tools/leaderelection/resourcelock"
-	"k8s.io/client-go/tools/record"
 )
 
 // registerServe registers the serve subcommand and flags
@@ -67,36 +58,8 @@ func registerServe(app *kingpin.Application) (*kingpin.CmdClause, *serveContext)
 	var (
 		configFile string
 		parsed     bool
-		ctx        serveContext
 	)
-	// Set defaults for parameters which are then overridden via flags, ENV, or ConfigFile
-	ctx = serveContext{
-		Kubeconfig:            filepath.Join(os.Getenv("HOME"), ".kube", "config"),
-		xdsAddr:               "127.0.0.1",
-		xdsPort:               8001,
-		statsAddr:             "0.0.0.0",
-		statsPort:             8002,
-		debugAddr:             "127.0.0.1",
-		debugPort:             6060,
-		metricsAddr:           "0.0.0.0",
-		metricsPort:           8000,
-		httpAccessLog:         contour.DEFAULT_HTTP_ACCESS_LOG,
-		httpsAccessLog:        contour.DEFAULT_HTTPS_ACCESS_LOG,
-		httpAddr:              "0.0.0.0",
-		httpsAddr:             "0.0.0.0",
-		httpPort:              8080,
-		httpsPort:             8443,
-		PermitInsecureGRPC:    false,
-		DisablePermitInsecure: false,
-		EnableLeaderElection:  false,
-		LeaderElectionConfig: LeaderElectionConfig{
-			LeaseDuration: time.Second * 15,
-			RenewDeadline: time.Second * 10,
-			RetryPeriod:   time.Second * 2,
-			Namespace:     "heptio-contour",
-			Name:          "contour",
-		},
-	}
+	ctx := newServeContext()
 
 	parseConfig := func(_ *kingpin.ParseContext) error {
 		if parsed || configFile == "" {
@@ -135,7 +98,9 @@ func registerServe(app *kingpin.Application) (*kingpin.CmdClause, *serveContext)
 	serve.Flag("contour-cert-file", "Contour certificate file name for serving gRPC over TLS").Envar("CONTOUR_CERT_FILE").StringVar(&ctx.contourCert)
 	serve.Flag("contour-key-file", "Contour key file name for serving gRPC over TLS").Envar("CONTOUR_KEY_FILE").StringVar(&ctx.contourKey)
 	serve.Flag("insecure", "Allow serving without TLS secured gRPC").BoolVar(&ctx.PermitInsecureGRPC)
-	serve.Flag("ingressroute-root-namespaces", "Restrict contour to searching these namespaces for root ingress routes").StringVar(&ctx.rootNamespaces)
+	// TODO(sas) Deprecate `ingressroute-root-namespaces` in v1.0
+	serve.Flag("ingressroute-root-namespaces", "DEPRECATED (Use 'root-namespaces'): Restrict contour to searching these namespaces for root ingress routes").StringVar(&ctx.rootNamespaces)
+	serve.Flag("root-namespaces", "Restrict contour to searching these namespaces for root ingress routes").StringVar(&ctx.rootNamespaces)
 
 	serve.Flag("ingress-class-name", "Contour IngressClass name").StringVar(&ctx.ingressClass)
 
@@ -147,128 +112,11 @@ func registerServe(app *kingpin.Application) (*kingpin.CmdClause, *serveContext)
 	serve.Flag("envoy-service-https-port", "Kubernetes Service port for HTTPS requests").IntVar(&ctx.httpsPort)
 	serve.Flag("use-proxy-protocol", "Use PROXY protocol for all listeners").BoolVar(&ctx.useProxyProto)
 
-	serve.Flag("enable-leader-election", "Enable leader election mechanism").BoolVar(&ctx.EnableLeaderElection)
-	return serve, &ctx
-}
+	serve.Flag("accesslog-format", "Format for Envoy access logs").StringVar(&ctx.AccessLogFormat)
+	serve.Flag("disable-leader-election", "Disable leader election mechanism").BoolVar(&ctx.DisableLeaderElection)
 
-type serveContext struct {
-	// contour's kubernetes client parameters
-	InCluster  bool   `yaml:"incluster"`
-	Kubeconfig string `yaml:"kubeconfig"`
-
-	// contour's xds service parameters
-	xdsAddr                         string
-	xdsPort                         int
-	caFile, contourCert, contourKey string
-
-	// contour's debug handler parameters
-	debugAddr string
-	debugPort int
-
-	// contour's metrics handler parameters
-	metricsAddr string
-	metricsPort int
-
-	// ingressroute root namespaces
-	rootNamespaces string
-
-	// ingress class
-	ingressClass string
-
-	// envoy's stats listener parameters
-	statsAddr string
-	statsPort int
-
-	// envoy's listener parameters
-	useProxyProto bool
-
-	// envoy's http listener parameters
-	httpAddr      string
-	httpPort      int
-	httpAccessLog string
-
-	// envoy's https listener parameters
-	httpsAddr      string
-	httpsPort      int
-	httpsAccessLog string
-
-	// PermitInsecureGRPC disables TLS on Contour's gRPC listener.
-	PermitInsecureGRPC bool `yaml:"-"`
-
-	TLSConfig `yaml:"tls"`
-
-	// DisablePermitInsecure disables the use of the
-	// permitInsecure field in IngressRoute.
-	DisablePermitInsecure bool `yaml:"disablePermitInsecure"`
-
-	EnableLeaderElection bool
-	LeaderElectionConfig `yaml:"-"`
-}
-
-// TLSConfig holds configuration file TLS configuration details.
-type TLSConfig struct {
-	MinimumProtocolVersion string `yaml:"minimum-protocol-version"`
-}
-
-// LeaderElectionConfig holds the config bits for leader election inside the
-// configuration file.
-type LeaderElectionConfig struct {
-	LeaseDuration time.Duration `yaml:"lease-duration"`
-	RenewDeadline time.Duration `yaml:"renew-deadline"`
-	RetryPeriod   time.Duration `yaml:"retry-period"`
-	Namespace     string        `yaml:"configmap-namespace"`
-	Name          string        `yaml:"configmap-name"`
-}
-
-// tlsconfig returns a new *tls.Config. If the context is not properly configured
-// for tls communication, tlsconfig returns nil.
-func (ctx *serveContext) tlsconfig() *tls.Config {
-
-	err := ctx.verifyTLSFlags()
-	check(err)
-
-	cert, err := tls.LoadX509KeyPair(ctx.contourCert, ctx.contourKey)
-	check(err)
-
-	ca, err := ioutil.ReadFile(ctx.caFile)
-	check(err)
-
-	certPool := x509.NewCertPool()
-	if ok := certPool.AppendCertsFromPEM(ca); !ok {
-		log.Fatalf("unable to append certificate in %s to CA pool", ctx.caFile)
-	}
-
-	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ClientCAs:    certPool,
-		Rand:         rand.Reader,
-	}
-}
-
-// verifyTLSFlags indicates if the TLS flags are set up correctly.
-func (ctx *serveContext) verifyTLSFlags() error {
-	if ctx.caFile == "" && ctx.contourCert == "" && ctx.contourKey == "" {
-		return errors.New("no TLS parameters and --insecure not supplied. You must supply one or the other")
-	}
-	// If one of the three TLS commands is not empty, they all must be not empty
-	if !(ctx.caFile != "" && ctx.contourCert != "" && ctx.contourKey != "") {
-		return errors.New("you must supply all three TLS parameters - --contour-cafile, --contour-cert-file, --contour-key-file, or none of them")
-	}
-	return nil
-}
-
-// ingressRouteRootNamespaces returns a slice of namespaces restricting where
-// contour should look for ingressroute roots.
-func (ctx *serveContext) ingressRouteRootNamespaces() []string {
-	if strings.TrimSpace(ctx.rootNamespaces) == "" {
-		return nil
-	}
-	var ns []string
-	for _, s := range strings.Split(ctx.rootNamespaces, ",") {
-		ns = append(ns, strings.TrimSpace(s))
-	}
-	return ns
+	serve.Flag("use-extensions-v1beta1-ingress", "Subscribe to the deprecated extensions/v1beta1.Ingress type").BoolVar(&ctx.UseExtensionsV1beta1Ingress)
+	return serve, ctx
 }
 
 // doServe runs the contour serve subcommand.
@@ -300,21 +148,24 @@ func doServe(log logrus.FieldLogger, ctx *serveContext) error {
 				HTTPSAddress:           ctx.httpsAddr,
 				HTTPSPort:              ctx.httpsPort,
 				HTTPSAccessLog:         ctx.httpsAccessLog,
+				AccessLogType:          ctx.AccessLogFormat,
+				AccessLogFields:        ctx.AccessLogFields,
 				MinimumProtocolVersion: dag.MinProtoVersion(ctx.TLSConfig.MinimumProtocolVersion),
+				RequestTimeout:         ctx.RequestTimeout,
 			},
 			ListenerCache: contour.NewListenerCache(ctx.statsAddr, ctx.statsPort),
 			FieldLogger:   log.WithField("context", "CacheHandler"),
-			IngressRouteStatus: &k8s.IngressRouteStatus{
-				Client: contourClient,
-			},
 		},
 		HoldoffDelay:    100 * time.Millisecond,
 		HoldoffMaxDelay: 500 * time.Millisecond,
+		CRDStatus: &k8s.CRDStatus{
+			Client: contourClient,
+		},
 		Builder: dag.Builder{
 			Source: dag.KubernetesCache{
-				IngressRouteRootNamespaces: ctx.ingressRouteRootNamespaces(),
-				IngressClass:               ctx.ingressClass,
-				FieldLogger:                log.WithField("context", "KubernetesCache"),
+				RootNamespaces: ctx.ingressRouteRootNamespaces(),
+				IngressClass:   ctx.ingressClass,
+				FieldLogger:    log.WithField("context", "KubernetesCache"),
 			},
 			DisablePermitInsecure: ctx.DisablePermitInsecure,
 		},
@@ -322,17 +173,30 @@ func doServe(log logrus.FieldLogger, ctx *serveContext) error {
 	}
 
 	// step 4. register our resource event handler with the k8s informers.
-	coreInformers.Core().V1().Services().Informer().AddEventHandler(eh)
-	coreInformers.Extensions().V1beta1().Ingresses().Informer().AddEventHandler(eh)
-	contourInformers.Contour().V1beta1().IngressRoutes().Informer().AddEventHandler(eh)
-	contourInformers.Contour().V1beta1().TLSCertificateDelegations().Informer().AddEventHandler(eh)
+	var informers []cache.SharedIndexInformer
+	informers = registerEventHandler(informers, coreInformers.Core().V1().Services().Informer(), eh)
+	informers = registerEventHandler(informers, contourInformers.Contour().V1beta1().IngressRoutes().Informer(), eh)
+	informers = registerEventHandler(informers, contourInformers.Contour().V1beta1().TLSCertificateDelegations().Informer(), eh)
+	informers = registerEventHandler(informers, contourInformers.Projectcontour().V1().HTTPProxies().Informer(), eh)
+	informers = registerEventHandler(informers, contourInformers.Projectcontour().V1().TLSCertificateDelegations().Informer(), eh)
+
+	// After K8s 1.13 the API server will automatically translate extensions/v1beta1.Ingress objects
+	// to networking/v1beta1.Ingress objects so we should only listen for one type or the other.
+	// The default behavior is to listen for networking/v1beta1.Ingress objects and let the API server
+	// transparently upgrade the extensions version for us.
+	if ctx.UseExtensionsV1beta1Ingress {
+		informers = registerEventHandler(informers, coreInformers.Extensions().V1beta1().Ingresses().Informer(), eh)
+	} else {
+		informers = registerEventHandler(informers, coreInformers.Networking().V1beta1().Ingresses().Informer(), eh)
+	}
+
 	// Add informers for each root-ingressroute namespaces
 	for _, inf := range namespacedInformers {
-		inf.Core().V1().Secrets().Informer().AddEventHandler(eh)
+		informers = registerEventHandler(informers, inf.Core().V1().Secrets().Informer(), eh)
 	}
 	// If root-ingressroutes are not defined, then add the informer for all namespaces
 	if len(namespacedInformers) == 0 {
-		coreInformers.Core().V1().Secrets().Informer().AddEventHandler(eh)
+		informers = registerEventHandler(informers, coreInformers.Core().V1().Secrets().Informer(), eh)
 	}
 
 	// step 5. endpoints updates are handled directly by the EndpointsTranslator
@@ -340,7 +204,8 @@ func doServe(log logrus.FieldLogger, ctx *serveContext) error {
 	et := &contour.EndpointsTranslator{
 		FieldLogger: log.WithField("context", "endpointstranslator"),
 	}
-	coreInformers.Core().V1().Endpoints().Informer().AddEventHandler(et)
+
+	informers = registerEventHandler(informers, coreInformers.Core().V1().Endpoints().Informer(), et)
 
 	// step 6. setup workgroup runner and register informers.
 	var g workgroup.Group
@@ -381,148 +246,104 @@ func doServe(log logrus.FieldLogger, ctx *serveContext) error {
 	}
 	g.Add(debugsvc.Start)
 
-	// step 11. Setup leader election
+	// step 11. if enabled, register leader election
+	if !ctx.DisableLeaderElection {
+		var le *leaderelection.LeaderElector
+		var deposed chan struct{}
+		le, eh.IsLeader, deposed = newLeaderElector(log, ctx, client, coordinationClient)
 
-	// leaderOK will block gRPC startup until it's closed.
-	leaderOK := make(chan struct{})
-	// deposed is closed by the leader election callback when
-	// we are deposed as leader so that we can clean up.
-	deposed := make(chan struct{})
+		g.AddContext(func(electionCtx context.Context) {
+			log.WithFields(logrus.Fields{
+				"configmapname":      ctx.LeaderElectionConfig.Name,
+				"configmapnamespace": ctx.LeaderElectionConfig.Namespace,
+			}).Info("started")
 
-	// Set up the leader election
-	// Generate the event recorder to send election events to the logs.
-	// Set up the event bits
-	eventBroadcaster := record.NewBroadcaster()
-	// Broadcast election events to the config map
-	eventBroadcaster.StartRecordingToSink(&clientcorev1.EventSinkImpl{Interface: clientcorev1.New(client.CoreV1().RESTClient()).Events("")})
-	eventsScheme := runtime.NewScheme()
-	// Need an eventsScheme
-	err := coreV1.AddToScheme(eventsScheme)
-	check(err)
-	// The recorder is what will record events about the resource lock
-	recorder := eventBroadcaster.NewRecorder(eventsScheme, coreV1.EventSource{Component: "contour"})
+			le.Run(electionCtx)
+			log.Info("stopped")
+		})
 
-	// Figure out the resource lock ID
-	resourceLockID, isPodNameEnvSet := os.LookupEnv("POD_NAME")
-	if !isPodNameEnvSet {
-		resourceLockID = uuid.New().String()
+		g.Add(func(stop <-chan struct{}) error {
+			log := log.WithField("context", "leaderelection-elected")
+			leader := eh.IsLeader
+			for {
+				select {
+				case <-stop:
+					// shut down
+					log.Info("stopped")
+					return nil
+				case <-leader:
+					log.Info("elected as leader, triggering rebuild")
+					eh.UpdateNow()
+
+					// disable this case
+					leader = nil
+				}
+			}
+		})
+
+		g.Add(func(stop <-chan struct{}) error {
+			// If we get deposed as leader, shut it down.
+			log := log.WithField("context", "leaderelection-deposer")
+			select {
+			case <-stop:
+				// shut down
+				log.Info("stopped")
+			case <-deposed:
+				log.Info("deposed as leader, shutting down")
+			}
+			return nil
+		})
+	} else {
+		log.Info("Leader election disabled")
+
+		// leadership election disabled, hardwire IsLeader to be always readable.
+		leader := make(chan struct{})
+		close(leader)
+		eh.IsLeader = leader
 	}
 
-	// Generate the resource lock.
-	// TODO(youngnick) change this to a Lease object instead
-	// of the configmap once the Lease API has been GA for a full support
-	// cycle (ie nine months).
-	rl, err := resourcelock.New(
-		resourcelock.ConfigMapsResourceLock,
-		ctx.LeaderElectionConfig.Namespace,
-		ctx.LeaderElectionConfig.Name,
-		client.CoreV1(),
-		coordinationClient,
-		resourcelock.ResourceLockConfig{
-			Identity:      resourceLockID,
-			EventRecorder: recorder,
-		},
-	)
-	check(err)
-
-	// Make the leader elector, ready to be used in the Workgroup.
-	le, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
-		Lock:          rl,
-		LeaseDuration: ctx.LeaderElectionConfig.LeaseDuration,
-		RenewDeadline: ctx.LeaderElectionConfig.RenewDeadline,
-		RetryPeriod:   ctx.LeaderElectionConfig.RetryPeriod,
-		Callbacks: leaderelection.LeaderCallbacks{
-			OnStartedLeading: func(ctx context.Context) {
-				log.WithFields(logrus.Fields{
-					"lock":     rl.Describe(),
-					"identity": rl.Identity(),
-				}).Info("elected leader")
-				close(leaderOK)
-			},
-			OnStoppedLeading: func() {
-				// The context being canceled will trigger a handler that will
-				// deal with being deposed.
-				close(deposed)
-			},
-		},
-	})
-	check(err)
-	// AddContext will generate its own context.Context and pass it in,
-	// managing the close process when the other goroutines are closed.
-	g.AddContext(func(electionCtx context.Context) {
-		log := log.WithField("context", "leaderelection")
-		if !ctx.EnableLeaderElection {
-			log.Info("Leader election disabled")
-			// if leader election is disabled, signal the gRPC goroutine
-			// to start serving and finsh up this context.
-			// The Workgroup will handle leaving this running until everything
-			// else closes down.
-			close(leaderOK)
-			<-electionCtx.Done()
-		}
-
-		log.WithFields(logrus.Fields{
-			"configmapname":      ctx.LeaderElectionConfig.Name,
-			"configmapnamespace": ctx.LeaderElectionConfig.Namespace,
-		}).Info("started")
-
-		le.Run(electionCtx)
-		log.Info("stopped")
-	})
-
-	g.Add(func(stop <-chan struct{}) error {
-		// If we get deposed as leader, shut it down.
-		log := log.WithField("context", "leaderelection-deposer")
-		select {
-		case <-stop:
-			// shut down
-			log.Info("stopped")
-		case <-deposed:
-			log.WithFields(logrus.Fields{
-				"lock":     rl.Describe(),
-				"identity": rl.Identity(),
-			}).Info("deposed as leader, shutting down")
-		}
-		return nil
-	})
 	// step 12. register our custom metrics and plumb into cache handler
 	// and resource event handler.
 	metrics := metrics.NewMetrics(registry)
 	eh.Metrics = metrics
 	eh.CacheHandler.Metrics = metrics
 
-	// step 14. create grpc handler and register with workgroup.
-	// This will block until the program becomes the leader.
+	// step 13. create grpc handler and register with workgroup.
 	g.Add(func(stop <-chan struct{}) error {
 		log := log.WithField("context", "grpc")
-		select {
-		case <-stop:
-			// shut down
-			return nil
-		case <-leaderOK:
-			// we've become leader, so continue
-		}
-		addr := net.JoinHostPort(ctx.xdsAddr, strconv.Itoa(ctx.xdsPort))
 
-		l, err := net.Listen("tcp", addr)
-		if err != nil {
-			return err
+		synced := make([]cache.InformerSynced, 0, len(informers))
+		for _, inf := range informers {
+			synced = append(synced, inf.HasSynced)
 		}
 
-		if !ctx.PermitInsecureGRPC {
-			tlsconfig := ctx.tlsconfig()
-			log.Info("establishing TLS")
-			l = tls.NewListener(l, tlsconfig)
+		log.Printf("waiting for informer caches to sync")
+		if !cache.WaitForCacheSync(stop, synced...) {
+			return fmt.Errorf("error waiting for cache to sync")
 		}
+		log.Printf("informer caches synced")
 
-		s := grpc.NewAPI(log, map[string]grpc.Resource{
+		resources := map[string]cgrpc.Resource{
 			eh.CacheHandler.ClusterCache.TypeURL():  &eh.CacheHandler.ClusterCache,
 			eh.CacheHandler.RouteCache.TypeURL():    &eh.CacheHandler.RouteCache,
 			eh.CacheHandler.ListenerCache.TypeURL(): &eh.CacheHandler.ListenerCache,
 			eh.CacheHandler.SecretCache.TypeURL():   &eh.CacheHandler.SecretCache,
 			et.TypeURL():                            et,
-		})
-		log.WithField("address", addr).Info("started")
+		}
+		opts := ctx.grpcOptions()
+		s := cgrpc.NewAPI(log, resources, registry, opts...)
+		addr := net.JoinHostPort(ctx.xdsAddr, strconv.Itoa(ctx.xdsPort))
+		l, err := net.Listen("tcp", addr)
+		if err != nil {
+			return err
+		}
+
+		log = log.WithField("address", addr)
+		if ctx.PermitInsecureGRPC {
+			log = log.WithField("insecure", true)
+		}
+
+		log.Info("started")
 		defer log.Info("stopped")
 
 		go func() {
@@ -533,8 +354,26 @@ func doServe(log logrus.FieldLogger, ctx *serveContext) error {
 		return s.Serve(l)
 	})
 
+	// step 14. Setup SIGTERM handler
+	g.Add(func(stop <-chan struct{}) error {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, syscall.SIGTERM)
+		select {
+		case <-c:
+			log.WithField("context", "sigterm-handler").Info("received SIGTERM, shutting down")
+		case <-stop:
+			// Do nothing. The group is shutting down.
+		}
+		return nil
+	})
+
 	// step 15. GO!
 	return g.Run()
+}
+
+func registerEventHandler(informers []cache.SharedIndexInformer, inf cache.SharedIndexInformer, eh cache.ResourceEventHandler) []cache.SharedIndexInformer {
+	inf.AddEventHandler(eh)
+	return append(informers, inf)
 }
 
 type informer interface {
@@ -544,10 +383,7 @@ type informer interface {
 
 func startInformer(inf informer, log logrus.FieldLogger) func(stop <-chan struct{}) error {
 	return func(stop <-chan struct{}) error {
-		log.Println("waiting for cache sync")
-		inf.WaitForCacheSync(stop)
-
-		log.Println("started")
+		log.Println("starting")
 		defer log.Println("stopped")
 		inf.Start(stop)
 		<-stop

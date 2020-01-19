@@ -1,4 +1,4 @@
-// Copyright © 2018 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,18 +17,22 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
-	"time"
+
+	"github.com/projectcontour/contour/internal/dag"
 
 	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/route"
-	"github.com/gogo/protobuf/types"
-	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
-	"github.com/heptio/contour/internal/contour"
-	"github.com/heptio/contour/internal/envoy"
+	envoy_api_v2_route "github.com/envoyproxy/go-control-plane/envoy/api/v2/route"
+	ingressroutev1 "github.com/projectcontour/contour/apis/contour/v1beta1"
+	projcontour "github.com/projectcontour/contour/apis/projectcontour/v1"
+	"github.com/projectcontour/contour/internal/assert"
+	"github.com/projectcontour/contour/internal/contour"
+	"github.com/projectcontour/contour/internal/envoy"
+	"github.com/projectcontour/contour/internal/protobuf"
 	"google.golang.org/grpc"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/api/extensions/v1beta1"
+	"k8s.io/api/networking/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
@@ -95,25 +99,14 @@ func TestEditIngress(t *testing.T) {
 	rh.OnAdd(old)
 
 	// check that it's been translated correctly.
-	assertEqual(t, &v2.DiscoveryResponse{
+	assert.Equal(t, &v2.DiscoveryResponse{
 		VersionInfo: "1",
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_http",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "*",
-					Domains: []string{"*"},
-					Routes: []route.Route{{
-						Match:               envoy.RoutePrefix("/"),
-						Action:              routecluster("default/kuard/80/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}},
-				}},
-			}),
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_https",
-			}),
-		},
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("*", envoy.Route(envoy.RoutePrefix("/"), routecluster("default/kuard/80/da39a3ee5e"))),
+			),
+			envoy.RouteConfiguration("ingress_https"),
+		),
 		TypeUrl: routeType,
 		Nonce:   "1",
 	}, streamRDS(t, cc))
@@ -139,25 +132,14 @@ func TestEditIngress(t *testing.T) {
 	})
 
 	// check that ingress_http has been updated.
-	assertEqual(t, &v2.DiscoveryResponse{
+	assert.Equal(t, &v2.DiscoveryResponse{
 		VersionInfo: "2",
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_http",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "*",
-					Domains: []string{"*"},
-					Routes: []route.Route{{
-						Match:               envoy.RoutePrefix("/testing"),
-						Action:              routecluster("default/kuard/80/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}},
-				}},
-			}),
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_https",
-			}),
-		},
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("*", envoy.Route(envoy.RoutePrefix("/testing"), routecluster("default/kuard/80/da39a3ee5e"))),
+			),
+			envoy.RouteConfiguration("ingress_https"),
+		),
 		TypeUrl: routeType,
 		Nonce:   "2",
 	}, streamRDS(t, cc))
@@ -219,25 +201,16 @@ func TestIngressPathRouteWithoutHost(t *testing.T) {
 	rh.OnAdd(s1)
 
 	// check that it's been translated correctly.
-	assertEqual(t, &v2.DiscoveryResponse{
+	assert.Equal(t, &v2.DiscoveryResponse{
 		VersionInfo: "2",
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_http",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "*",
-					Domains: []string{"*"},
-					Routes: []route.Route{{
-						Match:               envoy.RoutePrefix("/hello"),
-						Action:              routecluster("default/hello/80/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}},
-				}},
-			}),
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_https",
-			}),
-		},
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("*",
+					envoy.Route(envoy.RoutePrefix("/hello"), routecluster("default/hello/80/da39a3ee5e")),
+				),
+			),
+			envoy.RouteConfiguration("ingress_https"),
+		),
 		TypeUrl: routeType,
 		Nonce:   "2",
 	}, streamRDS(t, cc))
@@ -300,25 +273,16 @@ func TestEditIngressInPlace(t *testing.T) {
 	}
 	rh.OnAdd(s2)
 
-	assertEqual(t, &v2.DiscoveryResponse{
+	assert.Equal(t, &v2.DiscoveryResponse{
 		VersionInfo: "2",
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_http",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "hello.example.com",
-					Domains: domains("hello.example.com"),
-					Routes: []route.Route{{
-						Match:               envoy.RoutePrefix("/"),
-						Action:              routecluster("default/wowie/80/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}},
-				}},
-			}),
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_https",
-			}),
-		},
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("hello.example.com",
+					envoy.Route(envoy.RoutePrefix("/"), routecluster("default/wowie/80/da39a3ee5e")),
+				),
+			),
+			envoy.RouteConfiguration("ingress_https"),
+		),
 		TypeUrl: routeType,
 		Nonce:   "2",
 	}, streamRDS(t, cc))
@@ -350,29 +314,17 @@ func TestEditIngressInPlace(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(i1, i2)
-	assertEqual(t, &v2.DiscoveryResponse{
+	assert.Equal(t, &v2.DiscoveryResponse{
 		VersionInfo: "3",
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_http",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "hello.example.com",
-					Domains: domains("hello.example.com"),
-					Routes: []route.Route{{
-						Match:               envoy.RoutePrefix("/whoop"),
-						Action:              routecluster("default/kerpow/9000/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}, {
-						Match:               envoy.RoutePrefix("/"),
-						Action:              routecluster("default/wowie/80/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}},
-				}},
-			}),
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_https",
-			}),
-		},
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("hello.example.com",
+					envoy.Route(envoy.RoutePrefix("/whoop"), routecluster("default/kerpow/9000/da39a3ee5e")),
+					envoy.Route(envoy.RoutePrefix("/"), routecluster("default/wowie/80/da39a3ee5e")),
+				),
+			),
+			envoy.RouteConfiguration("ingress_https"),
+		),
 		TypeUrl: routeType,
 		Nonce:   "3",
 	}, streamRDS(t, cc))
@@ -409,24 +361,23 @@ func TestEditIngressInPlace(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(i2, i3)
-	assertEqual(t, &v2.DiscoveryResponse{
+	assert.Equal(t, &v2.DiscoveryResponse{
 		VersionInfo: "4",
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_http",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "hello.example.com",
-					Domains: domains("hello.example.com"),
-					Routes: []route.Route{{
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("hello.example.com",
+					&envoy_api_v2_route.Route{
 						Match:  envoy.RoutePrefix("/whoop"),
 						Action: envoy.UpgradeHTTPS(),
-					}, {
+					},
+					&envoy_api_v2_route.Route{
 						Match:  envoy.RoutePrefix("/"),
 						Action: envoy.UpgradeHTTPS(),
-					}},
-				}}}),
-			any(t, &v2.RouteConfiguration{Name: "ingress_https"}),
-		},
+					},
+				),
+			),
+			envoy.RouteConfiguration("ingress_https"),
+		),
 		TypeUrl: routeType,
 		Nonce:   "4",
 	}, streamRDS(t, cc))
@@ -477,151 +428,31 @@ func TestEditIngressInPlace(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(i3, i4)
-	assertEqual(t, &v2.DiscoveryResponse{
+	assert.Equal(t, &v2.DiscoveryResponse{
 		VersionInfo: "5",
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_http",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "hello.example.com",
-					Domains: domains("hello.example.com"),
-					Routes: []route.Route{{
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("hello.example.com",
+					&envoy_api_v2_route.Route{
 						Match:  envoy.RoutePrefix("/whoop"),
 						Action: envoy.UpgradeHTTPS(),
-					}, {
+					},
+					&envoy_api_v2_route.Route{
 						Match:  envoy.RoutePrefix("/"),
 						Action: envoy.UpgradeHTTPS(),
-					}},
-				}}}),
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_https",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "hello.example.com",
-					Domains: domains("hello.example.com"),
-					Routes: []route.Route{{
-						Match:               envoy.RoutePrefix("/whoop"),
-						Action:              routecluster("default/kerpow/9000/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}, {
-						Match:               envoy.RoutePrefix("/"),
-						Action:              routecluster("default/wowie/80/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}},
-				}}}),
-		},
+					},
+				),
+			),
+			envoy.RouteConfiguration("ingress_https",
+				envoy.VirtualHost("hello.example.com",
+					envoy.Route(envoy.RoutePrefix("/whoop"), routecluster("default/kerpow/9000/da39a3ee5e")),
+					envoy.Route(envoy.RoutePrefix("/"), routecluster("default/wowie/80/da39a3ee5e")),
+				),
+			),
+		),
 		TypeUrl: routeType,
 		Nonce:   "5",
 	}, streamRDS(t, cc))
-}
-
-// contour#164: backend request timeout support
-func TestRequestTimeout(t *testing.T) {
-	const (
-		durationInfinite  = time.Duration(0)
-		duration10Minutes = 10 * time.Minute
-	)
-
-	rh, cc, done := setup(t)
-	defer done()
-
-	s1 := &v1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "backend",
-			Namespace: "default",
-		},
-		Spec: v1.ServiceSpec{
-			Ports: []v1.ServicePort{{
-				Protocol:   "TCP",
-				Port:       80,
-				TargetPort: intstr.FromInt(8080),
-			}},
-		},
-	}
-	rh.OnAdd(s1)
-
-	// i1 is a simple ingress bound to the default vhost.
-	i1 := &v1beta1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{Name: "hello", Namespace: "default"},
-		Spec: v1beta1.IngressSpec{
-			Backend: backend("backend", intstr.FromInt(80)),
-		},
-	}
-	rh.OnAdd(i1)
-	assertRDS(t, cc, "1", []route.VirtualHost{{
-		Name:    "*",
-		Domains: []string{"*"},
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"),
-			Action:              routecluster("default/backend/80/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
-
-	// i2 adds an _invalid_ timeout, which we interpret as _infinite_.
-	i2 := &v1beta1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{Name: "hello", Namespace: "default",
-			Annotations: map[string]string{
-				"contour.heptio.com/request-timeout": "600", // not valid
-			},
-		},
-		Spec: v1beta1.IngressSpec{
-			Backend: backend("backend", intstr.FromInt(80)),
-		},
-	}
-	rh.OnUpdate(i1, i2)
-	assertRDS(t, cc, "2", []route.VirtualHost{{
-		Name:    "*",
-		Domains: []string{"*"},
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"),
-			Action:              clustertimeout("default/backend/80/da39a3ee5e", durationInfinite),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
-
-	// i3 corrects i2 to use a proper duration
-	i3 := &v1beta1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{Name: "hello", Namespace: "default",
-			Annotations: map[string]string{
-				"contour.heptio.com/request-timeout": "600s", // 10 * time.Minute
-			},
-		},
-		Spec: v1beta1.IngressSpec{
-			Backend: backend("backend", intstr.FromInt(80)),
-		},
-	}
-	rh.OnUpdate(i2, i3)
-	assertRDS(t, cc, "3", []route.VirtualHost{{
-		Name:    "*",
-		Domains: []string{"*"},
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"),
-			Action:              clustertimeout("default/backend/80/da39a3ee5e", duration10Minutes),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
-
-	// i4 updates i3 to explicitly request infinite timeout
-	i4 := &v1beta1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{Name: "hello", Namespace: "default",
-			Annotations: map[string]string{
-				"contour.heptio.com/request-timeout": "infinity",
-			},
-		},
-		Spec: v1beta1.IngressSpec{
-			Backend: backend("backend", intstr.FromInt(80)),
-		},
-	}
-	rh.OnUpdate(i3, i4)
-	assertRDS(t, cc, "4", []route.VirtualHost{{
-		Name:    "*",
-		Domains: []string{"*"},
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"),
-			Action:              clustertimeout("default/backend/80/da39a3ee5e", durationInfinite),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
 }
 
 // contour#250 ingress.kubernetes.io/force-ssl-redirect: "true" should apply
@@ -723,30 +554,29 @@ func TestSSLRedirectOverlay(t *testing.T) {
 		},
 	})
 
-	assertRDS(t, cc, "5", []route.VirtualHost{{ // ingress_http
-		Name:    "example.com",
-		Domains: domains("example.com"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/.well-known/acme-challenge/gVJl5NWL2owUqZekjHkt_bo3OHYC2XNDURRRgLI5JTk"),
-			Action:              routecluster("nginx-ingress/challenge-service/8009/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}, {
-			Match:  envoy.RoutePrefix("/"), // match all
-			Action: envoy.UpgradeHTTPS(),
-		}},
-	}}, []route.VirtualHost{{ // ingress_https
-		Name:    "example.com",
-		Domains: domains("example.com"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/.well-known/acme-challenge/gVJl5NWL2owUqZekjHkt_bo3OHYC2XNDURRRgLI5JTk"),
-			Action:              routecluster("nginx-ingress/challenge-service/8009/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}, {
-			Match:               envoy.RoutePrefix("/"), // match all
-			Action:              routecluster("default/app-service/8080/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}})
+	assertRDS(t, cc, "5", virtualhosts(
+		envoy.VirtualHost("example.com",
+			envoy.Route(
+				envoy.RoutePrefix("/.well-known/acme-challenge/gVJl5NWL2owUqZekjHkt_bo3OHYC2XNDURRRgLI5JTk"),
+				routecluster("nginx-ingress/challenge-service/8009/da39a3ee5e"),
+			),
+			&envoy_api_v2_route.Route{
+				Match:  envoy.RoutePrefix("/"), // match all
+				Action: envoy.UpgradeHTTPS(),
+			},
+		),
+	), virtualhosts(
+		envoy.VirtualHost("example.com",
+			envoy.Route(
+				envoy.RoutePrefix("/.well-known/acme-challenge/gVJl5NWL2owUqZekjHkt_bo3OHYC2XNDURRRgLI5JTk"),
+				routecluster("nginx-ingress/challenge-service/8009/da39a3ee5e"),
+			),
+			envoy.Route(
+				envoy.RoutePrefix("/"), // match all
+				routecluster("default/app-service/8080/da39a3ee5e"),
+			),
+		),
+	))
 }
 
 func TestInvalidCertInIngress(t *testing.T) {
@@ -803,15 +633,11 @@ func TestInvalidCertInIngress(t *testing.T) {
 		},
 	})
 
-	assertRDS(t, cc, "1", []route.VirtualHost{{ // ingress_http
-		Name:    "kuard.io",
-		Domains: domains("kuard.io"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"),
-			Action:              routecluster("default/kuard/80/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
+	assertRDS(t, cc, "1", virtualhosts(
+		envoy.VirtualHost("kuard.io",
+			envoy.Route(envoy.RoutePrefix("/"), routecluster("default/kuard/80/da39a3ee5e")),
+		),
+	), nil)
 
 	// Correct the secret
 	rh.OnUpdate(secret, &v1.Secret{
@@ -823,23 +649,15 @@ func TestInvalidCertInIngress(t *testing.T) {
 		Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
 	})
 
-	assertRDS(t, cc, "2", []route.VirtualHost{{ // ingress_http
-		Name:    "kuard.io",
-		Domains: domains("kuard.io"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"),
-			Action:              routecluster("default/kuard/80/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, []route.VirtualHost{{ // ingress_https
-		Name:    "kuard.io",
-		Domains: domains("kuard.io"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"),
-			Action:              routecluster("default/kuard/80/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}})
+	assertRDS(t, cc, "2", virtualhosts(
+		envoy.VirtualHost("kuard.io",
+			envoy.Route(envoy.RoutePrefix("/"), routecluster("default/kuard/80/da39a3ee5e")),
+		),
+	), virtualhosts(
+		envoy.VirtualHost("kuard.io",
+			envoy.Route(envoy.RoutePrefix("/"), routecluster("default/kuard/80/da39a3ee5e")),
+		),
+	))
 }
 
 // issue #257: editing default ingress did not remove original default route
@@ -892,15 +710,11 @@ func TestIssue257(t *testing.T) {
 	}
 	rh.OnAdd(s1)
 
-	assertRDS(t, cc, "2", []route.VirtualHost{{
-		Name:    "*",
-		Domains: []string{"*"},
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"), // match all
-			Action:              routecluster("default/kuard/80/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
+	assertRDS(t, cc, "2", virtualhosts(
+		envoy.VirtualHost("*",
+			envoy.Route(envoy.RoutePrefix("/"), routecluster("default/kuard/80/da39a3ee5e")),
+		),
+	), nil)
 
 	// apiVersion: extensions/v1beta1
 	// kind: Ingress
@@ -946,15 +760,11 @@ func TestIssue257(t *testing.T) {
 	}
 	rh.OnUpdate(i1, i2)
 
-	assertRDS(t, cc, "3", []route.VirtualHost{{
-		Name:    "kuard.db.gd-ms.com",
-		Domains: domains("kuard.db.gd-ms.com"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"), // match all
-			Action:              routecluster("default/kuard/80/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
+	assertRDS(t, cc, "3", virtualhosts(
+		envoy.VirtualHost("kuard.db.gd-ms.com",
+			envoy.Route(envoy.RoutePrefix("/"), routecluster("default/kuard/80/da39a3ee5e")),
+		),
+	), nil)
 }
 
 func TestRDSFilter(t *testing.T) {
@@ -1056,253 +866,42 @@ func TestRDSFilter(t *testing.T) {
 	}
 	rh.OnAdd(s2)
 
-	assertEqual(t, &v2.DiscoveryResponse{
+	assert.Equal(t, &v2.DiscoveryResponse{
 		VersionInfo: "5",
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_http",
-				VirtualHosts: []route.VirtualHost{{ // ingress_http
-					Name:    "example.com",
-					Domains: domains("example.com"),
-					Routes: []route.Route{{
-						Match:               envoy.RoutePrefix("/.well-known/acme-challenge/gVJl5NWL2owUqZekjHkt_bo3OHYC2XNDURRRgLI5JTk"),
-						Action:              routecluster("nginx-ingress/challenge-service/8009/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}, {
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("example.com",
+					envoy.Route(
+						envoy.RoutePrefix("/.well-known/acme-challenge/gVJl5NWL2owUqZekjHkt_bo3OHYC2XNDURRRgLI5JTk"),
+						routecluster("nginx-ingress/challenge-service/8009/da39a3ee5e"),
+					),
+					&envoy_api_v2_route.Route{
 						Match:  envoy.RoutePrefix("/"), // match all
 						Action: envoy.UpgradeHTTPS(),
-					}},
-				}},
-			}),
-		},
+					},
+				),
+			),
+		),
 		TypeUrl: routeType,
 		Nonce:   "5",
 	}, streamRDS(t, cc, "ingress_http"))
 
-	assertEqual(t, &v2.DiscoveryResponse{
+	assert.Equal(t, &v2.DiscoveryResponse{
 		VersionInfo: "5",
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_https",
-				VirtualHosts: []route.VirtualHost{{ // ingress_https
-					Name:    "example.com",
-					Domains: domains("example.com"),
-					Routes: []route.Route{{
-						Match:               envoy.RoutePrefix("/.well-known/acme-challenge/gVJl5NWL2owUqZekjHkt_bo3OHYC2XNDURRRgLI5JTk"),
-						Action:              routecluster("nginx-ingress/challenge-service/8009/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}, {
-						Match:               envoy.RoutePrefix("/"), // match all
-						Action:              routecluster("default/app-service/8080/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}},
-				}},
-			}),
-		},
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_https",
+				envoy.VirtualHost("example.com",
+					envoy.Route(
+						envoy.RoutePrefix("/.well-known/acme-challenge/gVJl5NWL2owUqZekjHkt_bo3OHYC2XNDURRRgLI5JTk"),
+						routecluster("nginx-ingress/challenge-service/8009/da39a3ee5e"),
+					),
+					envoy.Route(envoy.RoutePrefix("/"), routecluster("default/app-service/8080/da39a3ee5e")),
+				),
+			),
+		),
 		TypeUrl: routeType,
 		Nonce:   "5",
 	}, streamRDS(t, cc, "ingress_https"))
-}
-
-func TestWebsocketIngress(t *testing.T) {
-	rh, cc, done := setup(t)
-	defer done()
-
-	rh.OnAdd(&v1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ws",
-			Namespace: "default",
-		},
-		Spec: v1.ServiceSpec{
-			Ports: []v1.ServicePort{{
-				Protocol:   "TCP",
-				Port:       80,
-				TargetPort: intstr.FromInt(8080),
-			}},
-		},
-	})
-
-	rh.OnAdd(&v1beta1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ws",
-			Namespace: "default",
-			Annotations: map[string]string{
-				"contour.heptio.com/websocket-routes": "/",
-			},
-		},
-		Spec: v1beta1.IngressSpec{
-			Rules: []v1beta1.IngressRule{{
-				Host: "websocket.hello.world",
-				IngressRuleValue: v1beta1.IngressRuleValue{
-					HTTP: &v1beta1.HTTPIngressRuleValue{
-						Paths: []v1beta1.HTTPIngressPath{{
-							Path: "/",
-							Backend: v1beta1.IngressBackend{
-								ServiceName: "ws",
-								ServicePort: intstr.FromInt(80),
-							},
-						}},
-					},
-				},
-			}},
-		},
-	})
-
-	assertRDS(t, cc, "1", []route.VirtualHost{{
-		Name:    "websocket.hello.world",
-		Domains: domains("websocket.hello.world"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"), // match all
-			Action:              websocketroute("default/ws/80/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
-}
-
-func TestWebsocketIngressRoute(t *testing.T) {
-	rh, cc, done := setup(t)
-	defer done()
-
-	rh.OnAdd(&v1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ws",
-			Namespace: "default",
-		},
-		Spec: v1.ServiceSpec{
-			Ports: []v1.ServicePort{{
-				Protocol:   "TCP",
-				Port:       80,
-				TargetPort: intstr.FromInt(8080),
-			}},
-		},
-	})
-
-	rh.OnAdd(&ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simple",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "websocket.hello.world"},
-			Routes: []ingressroutev1.Route{{
-				Match: "/",
-				Services: []ingressroutev1.Service{{
-					Name: "ws",
-					Port: 80,
-				}},
-			}, {
-				Match:            "/ws-1",
-				EnableWebsockets: true,
-				Services: []ingressroutev1.Service{{
-					Name: "ws",
-					Port: 80,
-				}},
-			}, {
-				Match:            "/ws-2",
-				EnableWebsockets: true,
-				Services: []ingressroutev1.Service{{
-					Name: "ws",
-					Port: 80,
-				}},
-			}},
-		},
-	})
-
-	assertRDS(t, cc, "1", []route.VirtualHost{{
-		Name:    "websocket.hello.world",
-		Domains: domains("websocket.hello.world"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/ws-2"),
-			Action:              websocketroute("default/ws/80/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}, {
-			Match:               envoy.RoutePrefix("/ws-1"),
-			Action:              websocketroute("default/ws/80/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}, {
-			Match:               envoy.RoutePrefix("/"), // match all
-			Action:              routecluster("default/ws/80/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
-}
-
-func TestWebsocketIngressRoute_MultipleUpstreams(t *testing.T) {
-	rh, cc, done := setup(t)
-	defer done()
-
-	rh.OnAdd(&v1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ws",
-			Namespace: "default",
-		},
-		Spec: v1.ServiceSpec{
-			Ports: []v1.ServicePort{{
-				Protocol:   "TCP",
-				Port:       80,
-				TargetPort: intstr.FromInt(8080),
-			}},
-		},
-	})
-
-	rh.OnAdd(&v1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ws2",
-			Namespace: "default",
-		},
-		Spec: v1.ServiceSpec{
-			Ports: []v1.ServicePort{{
-				Protocol:   "TCP",
-				Port:       80,
-				TargetPort: intstr.FromInt(8080),
-			}},
-		},
-	})
-
-	rh.OnAdd(&ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simple",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "websocket.hello.world"},
-			Routes: []ingressroutev1.Route{{
-				Match: "/",
-				Services: []ingressroutev1.Service{{
-					Name: "ws",
-					Port: 80,
-				}},
-			}, {
-				Match:            "/ws-1",
-				EnableWebsockets: true,
-				Services: []ingressroutev1.Service{{
-					Name: "ws",
-					Port: 80,
-				},
-					{
-						Name: "ws2",
-						Port: 80,
-					}},
-			}, {
-				Match:            "/ws-2",
-				EnableWebsockets: true,
-				Services: []ingressroutev1.Service{{
-					Name: "ws",
-					Port: 80,
-				}},
-			}},
-		},
-	})
-
-	assertRDS(t, cc, "1", []route.VirtualHost{{
-		Name:    "websocket.hello.world",
-		Domains: domains("websocket.hello.world"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"), // match all
-			Action:              routecluster("default/ws/80/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
 }
 
 func TestPrefixRewriteIngressRoute(t *testing.T) {
@@ -1329,7 +928,7 @@ func TestPrefixRewriteIngressRoute(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "prefixrewrite.hello.world"},
+			VirtualHost: &projcontour.VirtualHost{Fqdn: "prefixrewrite.hello.world"},
 			Routes: []ingressroutev1.Route{{
 				Match: "/",
 				Services: []ingressroutev1.Service{{
@@ -1354,23 +953,13 @@ func TestPrefixRewriteIngressRoute(t *testing.T) {
 		},
 	})
 
-	assertRDS(t, cc, "1", []route.VirtualHost{{
-		Name:    "prefixrewrite.hello.world",
-		Domains: domains("prefixrewrite.hello.world"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/ws-2"),
-			Action:              prefixrewriteroute("default/ws/80/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}, {
-			Match:               envoy.RoutePrefix("/ws-1"),
-			Action:              prefixrewriteroute("default/ws/80/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}, {
-			Match:               envoy.RoutePrefix("/"), // match all
-			Action:              routecluster("default/ws/80/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
+	assertRDS(t, cc, "1", virtualhosts(
+		envoy.VirtualHost("prefixrewrite.hello.world",
+			envoy.Route(envoy.RoutePrefix("/ws-2"), prefixrewriteroute("default/ws/80/da39a3ee5e")),
+			envoy.Route(envoy.RoutePrefix("/ws-1"), prefixrewriteroute("default/ws/80/da39a3ee5e")),
+			envoy.Route(envoy.RoutePrefix("/"), routecluster("default/ws/80/da39a3ee5e")),
+		),
+	), nil)
 }
 
 // issue 404
@@ -1453,34 +1042,19 @@ func TestDefaultBackendDoesNotOverwriteNamedHost(t *testing.T) {
 		},
 	})
 
-	assertEqual(t, &v2.DiscoveryResponse{
+	assert.Equal(t, &v2.DiscoveryResponse{
 		VersionInfo: "1",
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_http",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "*",
-					Domains: []string{"*"},
-					Routes: []route.Route{{
-						Match:               envoy.RoutePrefix("/kuard"),
-						Action:              routecluster("default/kuard/8080/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}, {
-						Match:               envoy.RoutePrefix("/"),
-						Action:              routecluster("default/kuard/80/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}},
-				}, {
-					Name:    "test-gui",
-					Domains: domains("test-gui"),
-					Routes: []route.Route{{
-						Match:               envoy.RoutePrefix("/"),
-						Action:              routecluster("default/test-gui/80/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}},
-				}},
-			}),
-		},
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("*",
+					envoy.Route(envoy.RoutePrefix("/kuard"), routecluster("default/kuard/8080/da39a3ee5e")),
+					envoy.Route(envoy.RoutePrefix("/"), routecluster("default/kuard/80/da39a3ee5e")),
+				),
+				envoy.VirtualHost("test-gui",
+					envoy.Route(envoy.RoutePrefix("/"), routecluster("default/test-gui/80/da39a3ee5e")),
+				),
+			),
+		),
 		TypeUrl: routeType,
 		Nonce:   "1",
 	}, streamRDS(t, cc, "ingress_http"))
@@ -1488,7 +1062,7 @@ func TestDefaultBackendDoesNotOverwriteNamedHost(t *testing.T) {
 
 func TestRDSIngressRouteInsideRootNamespaces(t *testing.T) {
 	rh, cc, done := setup(t, func(reh *contour.EventHandler) {
-		reh.Builder.Source.IngressRouteRootNamespaces = []string{"roots"}
+		reh.Builder.Source.RootNamespaces = []string{"roots"}
 	})
 	defer done()
 
@@ -1513,7 +1087,7 @@ func TestRDSIngressRouteInsideRootNamespaces(t *testing.T) {
 			Namespace: "roots",
 		},
 		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "example.com"},
+			VirtualHost: &projcontour.VirtualHost{Fqdn: "example.com"},
 			Routes: []ingressroutev1.Route{{
 				Match: "/",
 				Services: []ingressroutev1.Service{{
@@ -1527,22 +1101,15 @@ func TestRDSIngressRouteInsideRootNamespaces(t *testing.T) {
 	// add ingressroute
 	rh.OnAdd(ir1)
 
-	assertEqual(t, &v2.DiscoveryResponse{
+	assert.Equal(t, &v2.DiscoveryResponse{
 		VersionInfo: "1",
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_http",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "example.com",
-					Domains: domains("example.com"),
-					Routes: []route.Route{{
-						Match:               envoy.RoutePrefix("/"),
-						Action:              routecluster("roots/kuard/8080/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}},
-				}},
-			}),
-		},
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("example.com",
+					envoy.Route(envoy.RoutePrefix("/"), routecluster("roots/kuard/8080/da39a3ee5e")),
+				),
+			),
+		),
 		TypeUrl: routeType,
 		Nonce:   "1",
 	}, streamRDS(t, cc, "ingress_http"))
@@ -1550,7 +1117,7 @@ func TestRDSIngressRouteInsideRootNamespaces(t *testing.T) {
 
 func TestRDSIngressRouteOutsideRootNamespaces(t *testing.T) {
 	rh, cc, done := setup(t, func(reh *contour.EventHandler) {
-		reh.Builder.Source.IngressRouteRootNamespaces = []string{"roots"}
+		reh.Builder.Source.RootNamespaces = []string{"roots"}
 	})
 	defer done()
 
@@ -1575,7 +1142,7 @@ func TestRDSIngressRouteOutsideRootNamespaces(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "example.com"},
+			VirtualHost: &projcontour.VirtualHost{Fqdn: "example.com"},
 			Routes: []ingressroutev1.Route{{
 				Match: "/",
 				Services: []ingressroutev1.Service{{
@@ -1589,196 +1156,14 @@ func TestRDSIngressRouteOutsideRootNamespaces(t *testing.T) {
 	// add ingressroute
 	rh.OnAdd(ir1)
 
-	assertEqual(t, &v2.DiscoveryResponse{
+	assert.Equal(t, &v2.DiscoveryResponse{
 		VersionInfo: "1",
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_http",
-			}),
-		},
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http"),
+		),
 		TypeUrl: routeType,
 		Nonce:   "1",
 	}, streamRDS(t, cc, "ingress_http"))
-}
-
-// Test DAGAdapter.IngressClass setting works, this could be done
-// in LDS or RDS, or even CDS, but this test mirrors the place it's
-// tested in internal/contour/route_test.go
-func TestRDSIngressRouteClassAnnotation(t *testing.T) {
-	rh, cc, done := setup(t, func(reh *contour.EventHandler) {
-		reh.Builder.Source.IngressClass = "linkerd"
-	})
-	defer done()
-
-	rh.OnAdd(&v1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kuard",
-			Namespace: "default",
-		},
-		Spec: v1.ServiceSpec{
-			Ports: []v1.ServicePort{{
-				Protocol:   "TCP",
-				Port:       8080,
-				TargetPort: intstr.FromInt(8080),
-			}},
-		},
-	})
-
-	ir1 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kuard ",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "www.example.com",
-			},
-			Routes: []ingressroutev1.Route{{
-				Match: "/",
-				Services: []ingressroutev1.Service{
-					{
-						Name: "kuard",
-						Port: 8080,
-					},
-				},
-			}},
-		},
-	}
-
-	rh.OnAdd(ir1)
-	assertRDS(t, cc, "1", []route.VirtualHost{{
-		Name:    "www.example.com",
-		Domains: domains("www.example.com"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"),
-			Action:              routecluster("default/kuard/8080/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
-
-	ir2 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kuard ",
-			Namespace: "default",
-			Annotations: map[string]string{
-				"kubernetes.io/ingress.class": "contour",
-			},
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "www.example.com",
-			},
-			Routes: []ingressroutev1.Route{{
-				Match: "/",
-				Services: []ingressroutev1.Service{
-					{
-						Name: "kuard",
-						Port: 8080,
-					},
-				},
-			}},
-		},
-	}
-	rh.OnUpdate(ir1, ir2)
-	assertRDS(t, cc, "2", nil, nil)
-
-	ir3 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kuard ",
-			Namespace: "default",
-			Annotations: map[string]string{
-				"contour.heptio.com/ingress.class": "contour",
-			},
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "www.example.com",
-			},
-			Routes: []ingressroutev1.Route{{
-				Match: "/",
-				Services: []ingressroutev1.Service{
-					{
-						Name: "kuard",
-						Port: 8080,
-					},
-				},
-			}},
-		},
-	}
-	rh.OnUpdate(ir2, ir3)
-	assertRDS(t, cc, "2", nil, nil)
-
-	ir4 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kuard ",
-			Namespace: "default",
-			Annotations: map[string]string{
-				"contour.heptio.com/ingress.class": "linkerd",
-			},
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "www.example.com",
-			},
-			Routes: []ingressroutev1.Route{{
-				Match: "/",
-				Services: []ingressroutev1.Service{
-					{
-						Name: "kuard",
-						Port: 8080,
-					},
-				},
-			}},
-		},
-	}
-	rh.OnUpdate(ir3, ir4)
-	assertRDS(t, cc, "3", []route.VirtualHost{{
-		Name:    "www.example.com",
-		Domains: domains("www.example.com"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"),
-			Action:              routecluster("default/kuard/8080/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
-
-	ir5 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kuard ",
-			Namespace: "default",
-			Annotations: map[string]string{
-				"kubernetes.io/ingress.class": "linkerd",
-			},
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
-				Fqdn: "www.example.com",
-			},
-			Routes: []ingressroutev1.Route{{
-				Match: "/",
-				Services: []ingressroutev1.Service{
-					{
-						Name: "kuard",
-						Port: 8080,
-					},
-				},
-			}},
-		},
-	}
-	rh.OnUpdate(ir4, ir5)
-
-	assertRDS(t, cc, "4", []route.VirtualHost{{
-		Name:    "www.example.com",
-		Domains: domains("www.example.com"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"),
-			Action:              routecluster("default/kuard/8080/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
-
-	rh.OnUpdate(ir5, ir3)
-	assertRDS(t, cc, "5", nil, nil)
 }
 
 // Test DAGAdapter.IngressClass setting works, this could be done
@@ -1817,15 +1202,11 @@ func TestRDSIngressClassAnnotation(t *testing.T) {
 		},
 	}
 	rh.OnAdd(i1)
-	assertRDS(t, cc, "1", []route.VirtualHost{{
-		Name:    "*",
-		Domains: []string{"*"},
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"),
-			Action:              routecluster("default/kuard/8080/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
+	assertRDS(t, cc, "1", virtualhosts(
+		envoy.VirtualHost("*",
+			envoy.Route(envoy.RoutePrefix("/"), routecluster("default/kuard/8080/da39a3ee5e")),
+		),
+	), nil)
 
 	i2 := &v1beta1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1879,15 +1260,11 @@ func TestRDSIngressClassAnnotation(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(i3, i4)
-	assertRDS(t, cc, "3", []route.VirtualHost{{
-		Name:    "*",
-		Domains: []string{"*"},
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"),
-			Action:              routecluster("default/kuard/8080/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
+	assertRDS(t, cc, "3", virtualhosts(
+		envoy.VirtualHost("*",
+			envoy.Route(envoy.RoutePrefix("/"), routecluster("default/kuard/8080/da39a3ee5e")),
+		),
+	), nil)
 
 	i5 := &v1beta1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1905,15 +1282,11 @@ func TestRDSIngressClassAnnotation(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(i4, i5)
-	assertRDS(t, cc, "4", []route.VirtualHost{{
-		Name:    "*",
-		Domains: []string{"*"},
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"),
-			Action:              routecluster("default/kuard/8080/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
+	assertRDS(t, cc, "4", virtualhosts(
+		envoy.VirtualHost("*",
+			envoy.Route(envoy.RoutePrefix("/"), routecluster("default/kuard/8080/da39a3ee5e")),
+		),
+	), nil)
 
 	rh.OnUpdate(i5, i3)
 	assertRDS(t, cc, "5", nil, nil)
@@ -1951,7 +1324,7 @@ func TestRDSAssertNoDataRaceDuringInsertAndStream(t *testing.T) {
 					Namespace: "default",
 				},
 				Spec: ingressroutev1.IngressRouteSpec{
-					VirtualHost: &ingressroutev1.VirtualHost{Fqdn: fmt.Sprintf("example-%d.com", i)},
+					VirtualHost: &projcontour.VirtualHost{Fqdn: fmt.Sprintf("example-%d.com", i)},
 					Routes: []ingressroutev1.Route{{
 						Match: "/",
 						Services: []ingressroutev1.Service{{
@@ -2039,15 +1412,11 @@ func TestRDSIngressSpecMissingHTTPKey(t *testing.T) {
 	}
 	rh.OnAdd(s1)
 
-	assertRDS(t, cc, "2", []route.VirtualHost{{
-		Name:    "test2.test.com",
-		Domains: domains("test2.test.com"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"), // match all
-			Action:              routecluster("default/network-test/9001/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
+	assertRDS(t, cc, "2", virtualhosts(
+		envoy.VirtualHost("test2.test.com",
+			envoy.Route(envoy.RoutePrefix("/"), routecluster("default/network-test/9001/da39a3ee5e")),
+		),
+	), nil)
 }
 
 func TestRouteWithAServiceWeight(t *testing.T) {
@@ -2074,7 +1443,7 @@ func TestRouteWithAServiceWeight(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "test2.test.com"},
+			VirtualHost: &projcontour.VirtualHost{Fqdn: "test2.test.com"},
 			Routes: []ingressroutev1.Route{{
 				Match: "/a",
 				Services: []ingressroutev1.Service{{
@@ -2087,15 +1456,11 @@ func TestRouteWithAServiceWeight(t *testing.T) {
 	}
 
 	rh.OnAdd(ir1)
-	assertRDS(t, cc, "1", []route.VirtualHost{{
-		Name:    "test2.test.com",
-		Domains: domains("test2.test.com"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/a"), // match all
-			Action:              routecluster("default/kuard/80/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
+	assertRDS(t, cc, "1", virtualhosts(
+		envoy.VirtualHost("test2.test.com",
+			envoy.Route(envoy.RoutePrefix("/a"), routecluster("default/kuard/80/da39a3ee5e")),
+		),
+	), nil)
 
 	ir2 := &ingressroutev1.IngressRoute{
 		ObjectMeta: metav1.ObjectMeta{
@@ -2103,7 +1468,7 @@ func TestRouteWithAServiceWeight(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "test2.test.com"},
+			VirtualHost: &projcontour.VirtualHost{Fqdn: "test2.test.com"},
 			Routes: []ingressroutev1.Route{{
 				Match: "/a",
 				Services: []ingressroutev1.Service{{
@@ -2120,18 +1485,14 @@ func TestRouteWithAServiceWeight(t *testing.T) {
 	}
 
 	rh.OnUpdate(ir1, ir2)
-	assertRDS(t, cc, "2", []route.VirtualHost{{
-		Name:    "test2.test.com",
-		Domains: domains("test2.test.com"),
-		Routes: []route.Route{{
-			Match: envoy.RoutePrefix("/a"), // match all
-			Action: routeweightedcluster(
+	assertRDS(t, cc, "2", virtualhosts(
+		envoy.VirtualHost("test2.test.com",
+			envoy.Route(envoy.RoutePrefix("/a"), routeweightedcluster(
 				weightedcluster{"default/kuard/80/da39a3ee5e", 60},
-				weightedcluster{"default/kuard/80/da39a3ee5e", 90},
+				weightedcluster{"default/kuard/80/da39a3ee5e", 90}),
 			),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
+		),
+	), nil)
 }
 
 func TestRouteWithTLS(t *testing.T) {
@@ -2167,9 +1528,9 @@ func TestRouteWithTLS(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
+			VirtualHost: &projcontour.VirtualHost{
 				Fqdn: "test2.test.com",
-				TLS: &ingressroutev1.TLS{
+				TLS: &projcontour.TLS{
 					SecretName: "example-tls",
 				},
 			},
@@ -2186,31 +1547,23 @@ func TestRouteWithTLS(t *testing.T) {
 	rh.OnAdd(ir1)
 
 	// check that ingress_http has been updated.
-	assertEqual(t, &v2.DiscoveryResponse{
+	assert.Equal(t, &v2.DiscoveryResponse{
 		VersionInfo: "1",
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_http",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "test2.test.com",
-					Domains: domains("test2.test.com"),
-					Routes: []route.Route{{
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("test2.test.com",
+					&envoy_api_v2_route.Route{
 						Match:  envoy.RoutePrefix("/a"),
 						Action: envoy.UpgradeHTTPS(),
-					}},
-				}}}),
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_https",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "test2.test.com",
-					Domains: domains("test2.test.com"),
-					Routes: []route.Route{{
-						Match:               envoy.RoutePrefix("/a"),
-						Action:              routecluster("default/kuard/80/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}},
-				}}}),
-		},
+					},
+				),
+			),
+			envoy.RouteConfiguration("ingress_https",
+				envoy.VirtualHost("test2.test.com",
+					envoy.Route(envoy.RoutePrefix("/a"), routecluster("default/kuard/80/da39a3ee5e")),
+				),
+			),
+		),
 		TypeUrl: routeType,
 		Nonce:   "1",
 	}, streamRDS(t, cc))
@@ -2262,17 +1615,16 @@ func TestRouteWithTLS_InsecurePaths(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
+			VirtualHost: &projcontour.VirtualHost{
 				Fqdn: "test2.test.com",
-				TLS: &ingressroutev1.TLS{
+				TLS: &projcontour.TLS{
 					SecretName: "example-tls",
 				},
 			},
 			Routes: []ingressroutev1.Route{{
 				Match:          "/insecure",
 				PermitInsecure: true,
-				Services: []ingressroutev1.Service{{
-					Name: "kuard",
+				Services: []ingressroutev1.Service{{Name: "kuard",
 					Port: 80,
 				}},
 			}, {
@@ -2288,43 +1640,25 @@ func TestRouteWithTLS_InsecurePaths(t *testing.T) {
 	rh.OnAdd(ir1)
 
 	// check that ingress_http has been updated.
-	assertEqual(t, &v2.DiscoveryResponse{
+	assert.Equal(t, &v2.DiscoveryResponse{
 		VersionInfo: "1",
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_http",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "test2.test.com",
-					Domains: domains("test2.test.com"),
-					Routes: []route.Route{
-						{
-							Match:  envoy.RoutePrefix("/secure"),
-							Action: envoy.UpgradeHTTPS(),
-						}, {
-							Match:               envoy.RoutePrefix("/insecure"),
-							Action:              routecluster("default/kuard/80/da39a3ee5e"),
-							RequestHeadersToAdd: envoy.RouteHeaders(),
-						},
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("test2.test.com",
+					&envoy_api_v2_route.Route{
+						Match:  envoy.RoutePrefix("/secure"),
+						Action: envoy.UpgradeHTTPS(),
 					},
-				}}}),
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_https",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "test2.test.com",
-					Domains: domains("test2.test.com"),
-					Routes: []route.Route{
-						{
-							Match:               envoy.RoutePrefix("/secure"),
-							Action:              routecluster("default/svc2/80/da39a3ee5e"),
-							RequestHeadersToAdd: envoy.RouteHeaders(),
-						}, {
-							Match:               envoy.RoutePrefix("/insecure"),
-							Action:              routecluster("default/kuard/80/da39a3ee5e"),
-							RequestHeadersToAdd: envoy.RouteHeaders(),
-						},
-					},
-				}}}),
-		},
+					envoy.Route(envoy.RoutePrefix("/insecure"), routecluster("default/kuard/80/da39a3ee5e")),
+				),
+			),
+			envoy.RouteConfiguration("ingress_https",
+				envoy.VirtualHost("test2.test.com",
+					envoy.Route(envoy.RoutePrefix("/secure"), routecluster("default/svc2/80/da39a3ee5e")),
+					envoy.Route(envoy.RoutePrefix("/insecure"), routecluster("default/kuard/80/da39a3ee5e")),
+				),
+			),
+		),
 		TypeUrl: routeType,
 		Nonce:   "1",
 	}, streamRDS(t, cc))
@@ -2380,9 +1714,9 @@ func TestRouteWithTLS_InsecurePaths_DisablePermitInsecureTrue(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{
+			VirtualHost: &projcontour.VirtualHost{
 				Fqdn: "test2.test.com",
-				TLS: &ingressroutev1.TLS{
+				TLS: &projcontour.TLS{
 					SecretName: "example-tls",
 				},
 			},
@@ -2406,427 +1740,31 @@ func TestRouteWithTLS_InsecurePaths_DisablePermitInsecureTrue(t *testing.T) {
 	rh.OnAdd(ir1)
 
 	// check that ingress_http has been updated.
-	assertEqual(t, &v2.DiscoveryResponse{
+	assert.Equal(t, &v2.DiscoveryResponse{
 		VersionInfo: "1",
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_http",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "test2.test.com",
-					Domains: domains("test2.test.com"),
-					Routes: []route.Route{
-						{
-							Match:  envoy.RoutePrefix("/secure"),
-							Action: envoy.UpgradeHTTPS(),
-						}, {
-							Match:  envoy.RoutePrefix("/insecure"),
-							Action: envoy.UpgradeHTTPS(),
-						},
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("test2.test.com",
+					&envoy_api_v2_route.Route{
+						Match:  envoy.RoutePrefix("/secure"),
+						Action: envoy.UpgradeHTTPS(),
 					},
-				}}}),
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_https",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "test2.test.com",
-					Domains: domains("test2.test.com"),
-					Routes: []route.Route{
-						{
-							Match:               envoy.RoutePrefix("/secure"),
-							Action:              routecluster("default/svc2/80/da39a3ee5e"),
-							RequestHeadersToAdd: envoy.RouteHeaders(),
-						}, {
-							Match:               envoy.RoutePrefix("/insecure"),
-							Action:              routecluster("default/kuard/80/da39a3ee5e"),
-							RequestHeadersToAdd: envoy.RouteHeaders(),
-						},
+					&envoy_api_v2_route.Route{
+						Match:  envoy.RoutePrefix("/insecure"),
+						Action: envoy.UpgradeHTTPS(),
 					},
-				}}}),
-		},
+				),
+			),
+			envoy.RouteConfiguration("ingress_https",
+				envoy.VirtualHost("test2.test.com",
+					envoy.Route(envoy.RoutePrefix("/secure"), routecluster("default/svc2/80/da39a3ee5e")),
+					envoy.Route(envoy.RoutePrefix("/insecure"), routecluster("default/kuard/80/da39a3ee5e")),
+				),
+			),
+		),
 		TypeUrl: routeType,
 		Nonce:   "1",
 	}, streamRDS(t, cc))
-}
-
-// issue 665, support for retry-on, num-retries, and per-try-timeout annotations.
-func TestRouteRetryAnnotations(t *testing.T) {
-	rh, cc, done := setup(t)
-	defer done()
-
-	s1 := &v1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "backend",
-			Namespace: "default",
-		},
-		Spec: v1.ServiceSpec{
-			Ports: []v1.ServicePort{{
-				Protocol:   "TCP",
-				Port:       80,
-				TargetPort: intstr.FromInt(8080),
-			}},
-		},
-	}
-	rh.OnAdd(s1)
-
-	i1 := &v1beta1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "hello", Namespace: "default",
-			Annotations: map[string]string{
-				"contour.heptio.com/retry-on":        "5xx,gateway-error",
-				"contour.heptio.com/num-retries":     "7",
-				"contour.heptio.com/per-try-timeout": "120ms",
-			},
-		},
-		Spec: v1beta1.IngressSpec{
-			Backend: backend("backend", intstr.FromInt(80)),
-		},
-	}
-	rh.OnAdd(i1)
-	assertRDS(t, cc, "1", []route.VirtualHost{{
-		Name:    "*",
-		Domains: []string{"*"},
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"), // match all
-			Action:              routeretry("default/backend/80/da39a3ee5e", "5xx,gateway-error", 7, 120*time.Millisecond),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
-}
-
-// issue 815, support for retry-on, num-retries, and per-try-timeout in IngressRoute
-func TestRouteRetryIngressRoute(t *testing.T) {
-	rh, cc, done := setup(t)
-	defer done()
-
-	s1 := &v1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "backend",
-			Namespace: "default",
-		},
-		Spec: v1.ServiceSpec{
-			Ports: []v1.ServicePort{{
-				Protocol:   "TCP",
-				Port:       80,
-				TargetPort: intstr.FromInt(8080),
-			}},
-		},
-	}
-	rh.OnAdd(s1)
-
-	i1 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simple",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "test2.test.com"},
-			Routes: []ingressroutev1.Route{{
-				Match: "/",
-				RetryPolicy: &ingressroutev1.RetryPolicy{
-					NumRetries:    7,
-					PerTryTimeout: "120ms",
-				},
-				Services: []ingressroutev1.Service{{
-					Name: "backend",
-					Port: 80,
-				}},
-			}},
-		},
-	}
-
-	rh.OnAdd(i1)
-	assertRDS(t, cc, "1", []route.VirtualHost{{
-		Name:    "test2.test.com",
-		Domains: domains("test2.test.com"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"), // match all
-			Action:              routeretry("default/backend/80/da39a3ee5e", "5xx", 7, 120*time.Millisecond),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
-}
-
-// issue 815, support for timeoutpolicy in IngressRoute
-func TestRouteTimeoutPolicyIngressRoute(t *testing.T) {
-	const (
-		durationInfinite  = time.Duration(0)
-		duration10Minutes = 10 * time.Minute
-	)
-
-	rh, cc, done := setup(t)
-	defer done()
-
-	s1 := &v1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "backend",
-			Namespace: "default",
-		},
-		Spec: v1.ServiceSpec{
-			Ports: []v1.ServicePort{{
-				Protocol:   "TCP",
-				Port:       80,
-				TargetPort: intstr.FromInt(8080),
-			}},
-		},
-	}
-	rh.OnAdd(s1)
-
-	// i1 is an _invalid_ timeout, which we interpret as _infinite_.
-	i1 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simple",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "test2.test.com"},
-			Routes: []ingressroutev1.Route{{
-				Match: "/",
-				Services: []ingressroutev1.Service{{
-					Name: "backend",
-					Port: 80,
-				}},
-			}},
-		},
-	}
-	rh.OnAdd(i1)
-	assertRDS(t, cc, "1", []route.VirtualHost{{
-		Name:    "test2.test.com",
-		Domains: domains("test2.test.com"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"), // match all
-			Action:              routecluster("default/backend/80/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
-
-	// i2 adds an _invalid_ timeout, which we interpret as _infinite_.
-	i2 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simple",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "test2.test.com"},
-			Routes: []ingressroutev1.Route{{
-				Match: "/",
-				TimeoutPolicy: &ingressroutev1.TimeoutPolicy{
-					Request: "600",
-				},
-				Services: []ingressroutev1.Service{{
-					Name: "backend",
-					Port: 80,
-				}},
-			}},
-		},
-	}
-	rh.OnUpdate(i1, i2)
-	assertRDS(t, cc, "2", []route.VirtualHost{{
-		Name:    "test2.test.com",
-		Domains: domains("test2.test.com"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"), // match all
-			Action:              clustertimeout("default/backend/80/da39a3ee5e", durationInfinite),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
-	// i3 corrects i2 to use a proper duration
-	i3 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simple",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "test2.test.com"},
-			Routes: []ingressroutev1.Route{{
-				Match: "/",
-				TimeoutPolicy: &ingressroutev1.TimeoutPolicy{
-					Request: "600s", // 10 * time.Minute
-				},
-				Services: []ingressroutev1.Service{{
-					Name: "backend",
-					Port: 80,
-				}},
-			}},
-		},
-	}
-	rh.OnUpdate(i2, i3)
-	assertRDS(t, cc, "3", []route.VirtualHost{{
-		Name:    "test2.test.com",
-		Domains: domains("test2.test.com"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"), // match all
-			Action:              clustertimeout("default/backend/80/da39a3ee5e", duration10Minutes),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
-	// i4 updates i3 to explicitly request infinite timeout
-	i4 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simple",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "test2.test.com"},
-			Routes: []ingressroutev1.Route{{
-				Match: "/",
-				TimeoutPolicy: &ingressroutev1.TimeoutPolicy{
-					Request: "infinity",
-				},
-				Services: []ingressroutev1.Service{{
-					Name: "backend",
-					Port: 80,
-				}},
-			}},
-		},
-	}
-	rh.OnUpdate(i3, i4)
-	assertRDS(t, cc, "4", []route.VirtualHost{{
-		Name:    "test2.test.com",
-		Domains: domains("test2.test.com"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/"), // match all
-			Action:              clustertimeout("default/backend/80/da39a3ee5e", durationInfinite),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
-}
-
-func TestRouteWithSessionAffinity(t *testing.T) {
-	rh, cc, done := setup(t)
-	defer done()
-
-	rh.OnAdd(&v1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "app",
-			Namespace: "default",
-		},
-		Spec: v1.ServiceSpec{
-			Ports: []v1.ServicePort{{
-				Protocol:   "TCP",
-				Port:       80,
-				TargetPort: intstr.FromInt(8080),
-			}, {
-				Protocol:   "TCP",
-				Port:       8080,
-				TargetPort: intstr.FromInt(8080),
-			}},
-		},
-	})
-
-	// simple single service
-	ir1 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simple",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "www.example.com"},
-			Routes: []ingressroutev1.Route{{
-				Match: "/cart",
-				Services: []ingressroutev1.Service{{
-					Name:     "app",
-					Port:     80,
-					Strategy: "Cookie",
-				}},
-			}},
-		},
-	}
-
-	rh.OnAdd(ir1)
-	assertRDS(t, cc, "1", []route.VirtualHost{{
-		Name:    "www.example.com",
-		Domains: domains("www.example.com"),
-		Routes: []route.Route{{
-			Match:               envoy.RoutePrefix("/cart"),
-			Action:              withSessionAffinity(routecluster("default/app/80/e4f81994fe")),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
-
-	// two backends
-	ir2 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simple",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "www.example.com"},
-			Routes: []ingressroutev1.Route{{
-				Match: "/cart",
-				Services: []ingressroutev1.Service{{
-					Name:     "app",
-					Port:     80,
-					Strategy: "Cookie",
-				}, {
-					Name:     "app",
-					Port:     8080,
-					Strategy: "Cookie",
-				}},
-			}},
-		},
-	}
-	rh.OnUpdate(ir1, ir2)
-	assertRDS(t, cc, "2", []route.VirtualHost{{
-		Name:    "www.example.com",
-		Domains: domains("www.example.com"),
-		Routes: []route.Route{{
-			Match: envoy.RoutePrefix("/cart"),
-			Action: withSessionAffinity(
-				routeweightedcluster(
-					weightedcluster{"default/app/80/e4f81994fe", 1},
-					weightedcluster{"default/app/8080/e4f81994fe", 1},
-				),
-			),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
-
-	// two mixed backends
-	ir3 := &ingressroutev1.IngressRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simple",
-			Namespace: "default",
-		},
-		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "www.example.com"},
-			Routes: []ingressroutev1.Route{{
-				Match: "/cart",
-				Services: []ingressroutev1.Service{{
-					Name:     "app",
-					Port:     80,
-					Strategy: "Cookie",
-				}, {
-					Name: "app",
-					Port: 8080,
-				}},
-			}, {
-				Match: "/",
-				Services: []ingressroutev1.Service{{
-					Name: "app",
-					Port: 80,
-				}},
-			}},
-		},
-	}
-	rh.OnUpdate(ir2, ir3)
-	assertRDS(t, cc, "3", []route.VirtualHost{{
-		Name:    "www.example.com",
-		Domains: domains("www.example.com"),
-		Routes: []route.Route{{
-			Match: envoy.RoutePrefix("/cart"),
-			Action: withSessionAffinity(
-				routeweightedcluster(
-					weightedcluster{"default/app/80/e4f81994fe", 1},
-					weightedcluster{"default/app/8080/da39a3ee5e", 1},
-				),
-			),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}, {
-			Match:               envoy.RoutePrefix("/"),
-			Action:              routecluster("default/app/80/da39a3ee5e"),
-			RequestHeadersToAdd: envoy.RouteHeaders(),
-		}},
-	}}, nil)
-
 }
 
 // issue 681 Increase the e2e coverage of lb strategies
@@ -2879,7 +1817,7 @@ func TestLoadBalancingStrategies(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: ingressroutev1.IngressRouteSpec{
-			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "test2.test.com"},
+			VirtualHost: &projcontour.VirtualHost{Fqdn: "test2.test.com"},
 			Routes: []ingressroutev1.Route{{
 				Match:    "/a",
 				Services: ss,
@@ -2888,17 +1826,11 @@ func TestLoadBalancingStrategies(t *testing.T) {
 	}
 
 	rh.OnAdd(ir)
-	want := []route.VirtualHost{{
-		Name:    "test2.test.com",
-		Domains: domains("test2.test.com"),
-		Routes: []route.Route{
-			{
-				Match:               envoy.RoutePrefix("/a"),
-				Action:              routeweightedcluster(wc...),
-				RequestHeadersToAdd: envoy.RouteHeaders(),
-			},
-		},
-	}}
+	want := virtualhosts(
+		envoy.VirtualHost("test2.test.com",
+			envoy.Route(envoy.RoutePrefix("/a"), routeweightedcluster(wc...)),
+		),
+	)
 	assertRDS(t, cc, "1", want, nil)
 }
 
@@ -2951,82 +1883,110 @@ func TestRoutePrefixRouteRegex(t *testing.T) {
 	rh.OnAdd(old)
 
 	// check that it's been translated correctly.
-	assertEqual(t, &v2.DiscoveryResponse{
+	assert.Equal(t, &v2.DiscoveryResponse{
 		VersionInfo: "1",
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_http",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "*",
-					Domains: []string{"*"},
-					Routes: []route.Route{{
-						Match:               envoy.RouteRegex("/[^/]+/invoices(/.*|/?)"),
-						Action:              routecluster("default/kuard/80/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}, {
-						Match:               envoy.RoutePrefix("/"),
-						Action:              routecluster("default/kuard/80/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}},
-				}},
-			}),
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_https",
-			}),
-		},
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("*",
+					envoy.Route(envoy.RouteRegex("/[^/]+/invoices(/.*|/?)"), routecluster("default/kuard/80/da39a3ee5e")),
+					envoy.Route(envoy.RoutePrefix("/"), routecluster("default/kuard/80/da39a3ee5e")),
+				),
+			),
+			envoy.RouteConfiguration("ingress_https"),
+		),
 		TypeUrl: routeType,
 		Nonce:   "1",
 	}, streamRDS(t, cc))
 }
 
-		VersionInfo: "2",
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_http",
-				VirtualHosts: []route.VirtualHost{{
-					Name:    "*",
-					Domains: []string{"*"},
-					Routes: []route.Route{{
-						Match:               envoy.RouteRegex("/[^/]+/invoices(/.*|/?)"),
-						Action:              routecluster("default/kuard/80/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}, {
-						Match:               envoy.RoutePrefix("/"),
-						Action:              routecluster("default/kuard/80/da39a3ee5e"),
-						RequestHeadersToAdd: envoy.RouteHeaders(),
-					}},
-				}},
-			}),
-			any(t, &v2.RouteConfiguration{
-				Name: "ingress_https",
-			}),
+func TestRDSIngressRouteRootCannotDelegateToAnotherRoot(t *testing.T) {
+	rh, cc, done := setup(t)
+	defer done()
+
+	svc1 := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "green",
+			Namespace: "marketing",
 		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:     "http",
+				Protocol: "TCP",
+				Port:     80,
+			}},
+		},
+	}
+	rh.OnAdd(svc1)
+
+	child := &ingressroutev1.IngressRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "blog",
+			Namespace: "marketing",
+		},
+		Spec: ingressroutev1.IngressRouteSpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "www.containersteve.com",
+			},
+			Routes: []ingressroutev1.Route{{
+				Match: "/",
+				Services: []ingressroutev1.Service{{
+					Name: svc1.Name,
+					Port: 80,
+				}},
+			}},
+		},
+	}
+	rh.OnAdd(child)
+
+	root := &ingressroutev1.IngressRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "root-blog",
+			Namespace: "default",
+		},
+		Spec: ingressroutev1.IngressRouteSpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "blog.containersteve.com",
+			},
+			Routes: []ingressroutev1.Route{{
+				Match: "/",
+				Delegate: &ingressroutev1.Delegate{
+					Name:      child.Name,
+					Namespace: child.Namespace,
+				},
+			}},
+		},
+	}
+	rh.OnAdd(root)
+
+	// verify that child's route is present because while it is not possible to
+	// delegate to it, it can host www.containersteve.com.
+	assert.Equal(t, &v2.DiscoveryResponse{
+		VersionInfo: "2",
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("www.containersteve.com",
+					envoy.Route(envoy.RoutePrefix("/"), routecluster("marketing/green/80/da39a3ee5e")),
+				),
+			),
+			envoy.RouteConfiguration("ingress_https"),
+		),
 		TypeUrl: routeType,
 		Nonce:   "2",
 	}, streamRDS(t, cc))
+
 }
 
-func assertRDS(t *testing.T, cc *grpc.ClientConn, versioninfo string, ingress_http, ingress_https []route.VirtualHost) {
+func assertRDS(t *testing.T, cc *grpc.ClientConn, versioninfo string, ingress_http, ingress_https []*envoy_api_v2_route.VirtualHost) {
 	t.Helper()
-	assertEqual(t, &v2.DiscoveryResponse{
+	assert.Equal(t, &v2.DiscoveryResponse{
 		VersionInfo: versioninfo,
 		Resources: resources(t,
-			&v2.RouteConfiguration{
-				Name:         "ingress_http",
-				VirtualHosts: ingress_http,
-			},
-			&v2.RouteConfiguration{
-				Name:         "ingress_https",
-				VirtualHosts: ingress_https,
-			},
+			envoy.RouteConfiguration("ingress_http", ingress_http...),
+			envoy.RouteConfiguration("ingress_https", ingress_https...),
 		),
 		TypeUrl: routeType,
 		Nonce:   versioninfo,
 	}, streamRDS(t, cc))
-}
-
-func domains(hostname string) []string {
-	return []string{hostname, hostname + ":*"}
 }
 
 func streamRDS(t *testing.T, cc *grpc.ClientConn, rn ...string) *v2.DiscoveryResponse {
@@ -3042,75 +2002,46 @@ func streamRDS(t *testing.T, cc *grpc.ClientConn, rn ...string) *v2.DiscoveryRes
 
 type weightedcluster struct {
 	name   string
-	weight int
+	weight uint32
 }
 
-func withSessionAffinity(r *route.Route_Route) *route.Route_Route {
-	r.Route.HashPolicy = append(r.Route.HashPolicy, &route.RouteAction_HashPolicy{
-		PolicySpecifier: &route.RouteAction_HashPolicy_Cookie_{
-			Cookie: &route.RouteAction_HashPolicy_Cookie{
-				Name: "X-Contour-Session-Affinity",
-				Ttl:  duration(0),
-				Path: "/",
-			},
-		},
-	})
-	return r
-}
-
-func routecluster(cluster string) *route.Route_Route {
-	return &route.Route_Route{
-		Route: &route.RouteAction{
-			ClusterSpecifier: &route.RouteAction_Cluster{
+func routecluster(cluster string) *envoy_api_v2_route.Route_Route {
+	return &envoy_api_v2_route.Route_Route{
+		Route: &envoy_api_v2_route.RouteAction{
+			ClusterSpecifier: &envoy_api_v2_route.RouteAction_Cluster{
 				Cluster: cluster,
 			},
 		},
 	}
 }
 
-func routeweightedcluster(clusters ...weightedcluster) *route.Route_Route {
-	return &route.Route_Route{
-		Route: &route.RouteAction{
-			ClusterSpecifier: &route.RouteAction_WeightedClusters{
+func routeweightedcluster(clusters ...weightedcluster) *envoy_api_v2_route.Route_Route {
+	return &envoy_api_v2_route.Route_Route{
+		Route: &envoy_api_v2_route.RouteAction{
+			ClusterSpecifier: &envoy_api_v2_route.RouteAction_WeightedClusters{
 				WeightedClusters: weightedclusters(clusters),
 			},
 		},
 	}
 }
 
-func weightedclusters(clusters []weightedcluster) *route.WeightedCluster {
-	var wc route.WeightedCluster
-	var total int
+func weightedclusters(clusters []weightedcluster) *envoy_api_v2_route.WeightedCluster {
+	var wc envoy_api_v2_route.WeightedCluster
+	var total uint32
 	for _, c := range clusters {
 		total += c.weight
-		wc.Clusters = append(wc.Clusters, &route.WeightedCluster_ClusterWeight{
+		wc.Clusters = append(wc.Clusters, &envoy_api_v2_route.WeightedCluster_ClusterWeight{
 			Name:   c.name,
-			Weight: u32(c.weight),
+			Weight: protobuf.UInt32(c.weight),
 		})
 	}
-	wc.TotalWeight = u32(total)
+	wc.TotalWeight = protobuf.UInt32(total)
 	return &wc
 }
 
-func websocketroute(c string) *route.Route_Route {
-	cl := routecluster(c)
-	cl.Route.UpgradeConfigs = append(cl.Route.UpgradeConfigs,
-		&route.RouteAction_UpgradeConfig{
-			UpgradeType: "websocket",
-		},
-	)
-	return cl
-}
-
-func prefixrewriteroute(c string) *route.Route_Route {
+func prefixrewriteroute(c string) *envoy_api_v2_route.Route_Route {
 	cl := routecluster(c)
 	cl.Route.PrefixRewrite = "/"
-	return cl
-}
-
-func clustertimeout(c string, timeout time.Duration) *route.Route_Route {
-	cl := routecluster(c)
-	cl.Route.Timeout = &timeout
 	return cl
 }
 
@@ -3140,18 +2071,818 @@ func externalnameservice(ns, name, externalname string, ports ...v1.ServicePort)
 	}
 }
 
-func routeretry(cluster string, retryOn string, numRetries int, perTryTimeout time.Duration) *route.Route_Route {
-	r := routecluster(cluster)
-	r.Route.RetryPolicy = &route.RetryPolicy{
-		RetryOn: retryOn,
+func TestRDSHTTPProxyOutsideRootNamespaces(t *testing.T) {
+	rh, cc, done := setup(t, func(reh *contour.EventHandler) {
+		reh.Builder.Source.RootNamespaces = []string{"roots"}
+	})
+	defer done()
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       8080,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	// proxy1 is an httpproxy that is not in the root namespaces
+	proxy1 := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{Fqdn: "example.com"},
+			Routes: []projcontour.Route{{
+				Services: []projcontour.Service{{
+					Name: "kuard",
+					Port: 8080,
+				}},
+			}},
+		},
 	}
-	if numRetries > 0 {
-		r.Route.RetryPolicy.NumRetries = u32(numRetries)
-	}
-	if perTryTimeout > 0 {
-		r.Route.RetryPolicy.PerTryTimeout = &perTryTimeout
-	}
-	return r
+
+	// add proxy
+	rh.OnAdd(proxy1)
+
+	assert.Equal(t, &v2.DiscoveryResponse{
+		VersionInfo: "1",
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http"),
+		),
+		TypeUrl: routeType,
+		Nonce:   "1",
+	}, streamRDS(t, cc, "ingress_http"))
 }
 
-func duration(d time.Duration) *time.Duration { return &d }
+func TestHTTPProxyRouteWithAServiceWeight(t *testing.T) {
+	rh, cc, done := setup(t)
+	defer done()
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       80,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	proxy1 := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{Fqdn: "test2.test.com"},
+			Routes: []projcontour.Route{{
+				Conditions: conditions(prefixCondition("/a")),
+				Services: []projcontour.Service{{
+					Name:   "kuard",
+					Port:   80,
+					Weight: 90, // ignored
+				}},
+			}},
+		},
+	}
+
+	rh.OnAdd(proxy1)
+	assertRDS(t, cc, "1", virtualhosts(
+		envoy.VirtualHost("test2.test.com",
+			envoy.Route(envoy.RoutePrefix("/a"), routecluster("default/kuard/80/da39a3ee5e")),
+		),
+	), nil)
+
+	proxy2 := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{Fqdn: "test2.test.com"},
+			Routes: []projcontour.Route{{
+				Conditions: conditions(prefixCondition("/a")),
+				Services: []projcontour.Service{{
+					Name:   "kuard",
+					Port:   80,
+					Weight: 90,
+				}, {
+					Name:   "kuard",
+					Port:   80,
+					Weight: 60,
+				}},
+			}},
+		},
+	}
+
+	rh.OnUpdate(proxy1, proxy2)
+	assertRDS(t, cc, "2", virtualhosts(
+		envoy.VirtualHost("test2.test.com",
+			envoy.Route(envoy.RoutePrefix("/a"), routeweightedcluster(
+				weightedcluster{"default/kuard/80/da39a3ee5e", 60},
+				weightedcluster{"default/kuard/80/da39a3ee5e", 90}),
+			),
+		),
+	), nil)
+}
+
+func TestConditions_ContainsHeader_HTTProxy(t *testing.T) {
+	rh, cc, done := setup(t)
+	defer done()
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "svc1",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       80,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "svc2",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       80,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "svc3",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       80,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	proxy1 := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{Fqdn: "hello.world"},
+			Routes: []projcontour.Route{{
+				Services: []projcontour.Service{{
+					Name: "svc1",
+					Port: 80,
+				}},
+			}, {
+				Conditions: conditions(
+					prefixCondition("/"),
+					headerCondition("x-header", "abc", "contains", false),
+				),
+				Services: []projcontour.Service{{
+					Name: "svc2",
+					Port: 80,
+				}},
+			}, {
+				Conditions: conditions(
+					prefixCondition("/blog"),
+					headerCondition("x-header", "abc", "contains", false),
+				),
+				Services: []projcontour.Service{{
+					Name: "svc3",
+					Port: 80,
+				}},
+			}},
+		},
+	}
+	rh.OnAdd(proxy1)
+
+	assertRDS(t, cc, "1", virtualhosts(
+		envoy.VirtualHost("hello.world",
+			envoy.Route(envoy.RoutePrefix("/blog", dag.HeaderCondition{
+				Name:      "x-header",
+				Value:     "abc",
+				MatchType: "contains",
+				Invert:    false,
+			}), routecluster("default/svc3/80/da39a3ee5e")),
+			envoy.Route(envoy.RoutePrefix("/", dag.HeaderCondition{
+				Name:      "x-header",
+				Value:     "abc",
+				MatchType: "contains",
+				Invert:    false,
+			}), routecluster("default/svc2/80/da39a3ee5e")),
+			envoy.Route(envoy.RoutePrefix("/"), routecluster("default/svc1/80/da39a3ee5e")),
+		),
+	), nil)
+
+	proxy2 := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{Fqdn: "hello.world"},
+			Routes: []projcontour.Route{{
+				Services: []projcontour.Service{{
+					Name: "svc1",
+					Port: 80,
+				}},
+			}, {
+				Conditions: conditions(
+					prefixCondition("/"),
+					headerCondition("x-header", "123", "notcontains", false),
+				),
+				Services: []projcontour.Service{{
+					Name: "svc2",
+					Port: 80,
+				}},
+			}, {
+				Conditions: conditions(
+					prefixCondition("/blog"),
+					headerCondition("x-header", "abc", "notcontains", false),
+				),
+				Services: []projcontour.Service{{
+					Name: "svc3",
+					Port: 80,
+				}},
+			}},
+		},
+	}
+
+	rh.OnUpdate(proxy1, proxy2)
+
+	assertRDS(t, cc, "1", virtualhosts(
+		envoy.VirtualHost("hello.world",
+			envoy.Route(envoy.RoutePrefix("/blog", dag.HeaderCondition{
+				Name:      "x-header",
+				Value:     "abc",
+				MatchType: "contains",
+				Invert:    true,
+			}), routecluster("default/svc3/80/da39a3ee5e")),
+			envoy.Route(envoy.RoutePrefix("/", dag.HeaderCondition{
+				Name:      "x-header",
+				Value:     "123",
+				MatchType: "contains",
+				Invert:    true,
+			}), routecluster("default/svc2/80/da39a3ee5e")),
+			envoy.Route(envoy.RoutePrefix("/"), routecluster("default/svc1/80/da39a3ee5e")),
+		),
+	), nil)
+
+	proxy3 := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{Fqdn: "hello.world"},
+			Routes: []projcontour.Route{{
+				Services: []projcontour.Service{{
+					Name: "svc1",
+					Port: 80,
+				}},
+			}, {
+				Conditions: conditions(
+					prefixCondition("/"),
+					headerCondition("x-header", "abc", "exact", false),
+				),
+				Services: []projcontour.Service{{
+					Name: "svc2",
+					Port: 80,
+				}},
+			}, {
+				Conditions: conditions(
+					prefixCondition("/blog"),
+					headerCondition("x-header", "123", "exact", false),
+				),
+				Services: []projcontour.Service{{
+					Name: "svc3",
+					Port: 80,
+				}},
+			}},
+		},
+	}
+
+	rh.OnUpdate(proxy2, proxy3)
+
+	assertRDS(t, cc, "1", virtualhosts(
+		envoy.VirtualHost("hello.world",
+			envoy.Route(envoy.RoutePrefix("/blog", dag.HeaderCondition{
+				Name:      "x-header",
+				Value:     "123",
+				MatchType: "exact",
+				Invert:    false,
+			}), routecluster("default/svc3/80/da39a3ee5e")),
+			envoy.Route(envoy.RoutePrefix("/", dag.HeaderCondition{
+				Name:      "x-header",
+				Value:     "abc",
+				MatchType: "exact",
+				Invert:    false,
+			}), routecluster("default/svc2/80/da39a3ee5e")),
+			envoy.Route(envoy.RoutePrefix("/"), routecluster("default/svc1/80/da39a3ee5e")),
+		),
+	), nil)
+
+	proxy4 := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{Fqdn: "hello.world"},
+			Routes: []projcontour.Route{{
+				Services: []projcontour.Service{{
+					Name: "svc1",
+					Port: 80,
+				}},
+			}, {
+				Conditions: conditions(
+					prefixCondition("/"),
+					headerCondition("x-header", "abc", "notexact", false),
+				),
+				Services: []projcontour.Service{{
+					Name: "svc2",
+					Port: 80,
+				}},
+			}, {
+				Conditions: conditions(
+					prefixCondition("/blog"),
+					headerCondition("x-header", "123", "notexact", false),
+				),
+				Services: []projcontour.Service{{
+					Name: "svc3",
+					Port: 80,
+				}},
+			}},
+		},
+	}
+
+	rh.OnUpdate(proxy3, proxy4)
+
+	assertRDS(t, cc, "1", virtualhosts(
+		envoy.VirtualHost("hello.world",
+			envoy.Route(envoy.RoutePrefix("/blog", dag.HeaderCondition{
+				Name:      "x-header",
+				Value:     "123",
+				MatchType: "exact",
+				Invert:    true,
+			}), routecluster("default/svc3/80/da39a3ee5e")),
+			envoy.Route(envoy.RoutePrefix("/", dag.HeaderCondition{
+				Name:      "x-header",
+				Value:     "abc",
+				MatchType: "exact",
+				Invert:    true,
+			}), routecluster("default/svc2/80/da39a3ee5e")),
+			envoy.Route(envoy.RoutePrefix("/"), routecluster("default/svc1/80/da39a3ee5e")),
+		),
+	), nil)
+
+	proxy5 := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{Fqdn: "hello.world"},
+			Routes: []projcontour.Route{{
+				Services: []projcontour.Service{{
+					Name: "svc1",
+					Port: 80,
+				}},
+			}, {
+				Conditions: conditions(
+					prefixCondition("/"),
+					headerCondition("x-header", "abc", "", true),
+				),
+				Services: []projcontour.Service{{
+					Name: "svc2",
+					Port: 80,
+				}},
+			}, {
+				Conditions: conditions(
+					prefixCondition("/blog"),
+					headerCondition("x-header", "123", "", true),
+				),
+				Services: []projcontour.Service{{
+					Name: "svc3",
+					Port: 80,
+				}},
+			}},
+		},
+	}
+
+	rh.OnUpdate(proxy4, proxy5)
+
+	assertRDS(t, cc, "1", virtualhosts(
+		envoy.VirtualHost("hello.world",
+			envoy.Route(envoy.RoutePrefix("/blog", dag.HeaderCondition{
+				Name:      "x-header",
+				MatchType: "present",
+				Invert:    false,
+			}), routecluster("default/svc3/80/da39a3ee5e")),
+			envoy.Route(envoy.RoutePrefix("/", dag.HeaderCondition{
+				Name:      "x-header",
+				MatchType: "present",
+				Invert:    false,
+			}), routecluster("default/svc2/80/da39a3ee5e")),
+			envoy.Route(envoy.RoutePrefix("/"), routecluster("default/svc1/80/da39a3ee5e")),
+		),
+	), nil)
+}
+
+func TestHTTPProxyRouteWithTLS(t *testing.T) {
+	rh, cc, done := setup(t)
+	defer done()
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       80,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	rh.OnAdd(&v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-tls",
+			Namespace: "default",
+		},
+		Type: "kubernetes.io/tls",
+		Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
+	})
+
+	proxy1 := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "test2.test.com",
+				TLS: &projcontour.TLS{
+					SecretName: "example-tls",
+				},
+			},
+			Routes: []projcontour.Route{{
+				Conditions: conditions(prefixCondition("/a")),
+				Services: []projcontour.Service{{
+					Name: "kuard",
+					Port: 80,
+				}},
+			}},
+		},
+	}
+
+	rh.OnAdd(proxy1)
+
+	// check that ingress_http has been updated.
+	assert.Equal(t, &v2.DiscoveryResponse{
+		VersionInfo: "1",
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("test2.test.com",
+					&envoy_api_v2_route.Route{
+						Match:  envoy.RoutePrefix("/a"),
+						Action: envoy.UpgradeHTTPS(),
+					},
+				),
+			),
+			envoy.RouteConfiguration("ingress_https",
+				envoy.VirtualHost("test2.test.com",
+					envoy.Route(envoy.RoutePrefix("/a"), routecluster("default/kuard/80/da39a3ee5e")),
+				),
+			),
+		),
+		TypeUrl: routeType,
+		Nonce:   "1",
+	}, streamRDS(t, cc))
+}
+
+func TestHTTPProxyRouteWithTLS_InsecurePaths(t *testing.T) {
+	rh, cc, done := setup(t)
+	defer done()
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       80,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "svc2",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       80,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	rh.OnAdd(&v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-tls",
+			Namespace: "default",
+		},
+		Type: "kubernetes.io/tls",
+		Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
+	})
+
+	proxy1 := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "test2.test.com",
+				TLS: &projcontour.TLS{
+					SecretName: "example-tls",
+				},
+			},
+			Routes: []projcontour.Route{{
+				Conditions:     conditions(prefixCondition("/insecure")),
+				PermitInsecure: true,
+				Services: []projcontour.Service{{Name: "kuard",
+					Port: 80,
+				}},
+			}, {
+				Conditions: conditions(prefixCondition("/secure")),
+				Services: []projcontour.Service{{
+					Name: "svc2",
+					Port: 80,
+				}},
+			}},
+		},
+	}
+
+	rh.OnAdd(proxy1)
+
+	// check that ingress_http has been updated.
+	assert.Equal(t, &v2.DiscoveryResponse{
+		VersionInfo: "1",
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("test2.test.com",
+					&envoy_api_v2_route.Route{
+						Match:  envoy.RoutePrefix("/secure"),
+						Action: envoy.UpgradeHTTPS(),
+					},
+					envoy.Route(envoy.RoutePrefix("/insecure"), routecluster("default/kuard/80/da39a3ee5e")),
+				),
+			),
+			envoy.RouteConfiguration("ingress_https",
+				envoy.VirtualHost("test2.test.com",
+					envoy.Route(envoy.RoutePrefix("/secure"), routecluster("default/svc2/80/da39a3ee5e")),
+					envoy.Route(envoy.RoutePrefix("/insecure"), routecluster("default/kuard/80/da39a3ee5e")),
+				),
+			),
+		),
+		TypeUrl: routeType,
+		Nonce:   "1",
+	}, streamRDS(t, cc))
+}
+
+func TestHTTPProxyRouteWithTLS_InsecurePaths_DisablePermitInsecureTrue(t *testing.T) {
+	rh, cc, done := setup(t, func(reh *contour.EventHandler) {
+		reh.DisablePermitInsecure = true
+	})
+
+	defer done()
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       80,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "svc2",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       80,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	rh.OnAdd(&v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-tls",
+			Namespace: "default",
+		},
+		Type: "kubernetes.io/tls",
+		Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
+	})
+
+	proxy1 := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "test2.test.com",
+				TLS: &projcontour.TLS{
+					SecretName: "example-tls",
+				},
+			},
+			Routes: []projcontour.Route{{
+				Conditions:     conditions(prefixCondition("/insecure")),
+				PermitInsecure: true,
+				Services: []projcontour.Service{{
+					Name: "kuard",
+					Port: 80,
+				}},
+			}, {
+				Conditions: conditions(prefixCondition("/secure")),
+				Services: []projcontour.Service{{
+					Name: "svc2",
+					Port: 80,
+				}},
+			}},
+		},
+	}
+
+	rh.OnAdd(proxy1)
+
+	// check that ingress_http has been updated.
+	assert.Equal(t, &v2.DiscoveryResponse{
+		VersionInfo: "1",
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("test2.test.com",
+					&envoy_api_v2_route.Route{
+						Match:  envoy.RoutePrefix("/secure"),
+						Action: envoy.UpgradeHTTPS(),
+					},
+					&envoy_api_v2_route.Route{
+						Match:  envoy.RoutePrefix("/insecure"),
+						Action: envoy.UpgradeHTTPS(),
+					},
+				),
+			),
+			envoy.RouteConfiguration("ingress_https",
+				envoy.VirtualHost("test2.test.com",
+					envoy.Route(envoy.RoutePrefix("/secure"), routecluster("default/svc2/80/da39a3ee5e")),
+					envoy.Route(envoy.RoutePrefix("/insecure"), routecluster("default/kuard/80/da39a3ee5e")),
+				),
+			),
+		),
+		TypeUrl: routeType,
+		Nonce:   "1",
+	}, streamRDS(t, cc))
+}
+
+func TestRDSHTTPProxyRootCannotDelegateToAnotherRoot(t *testing.T) {
+	rh, cc, done := setup(t)
+	defer done()
+
+	svc1 := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "green",
+			Namespace: "marketing",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:     "http",
+				Protocol: "TCP",
+				Port:     80,
+			}},
+		},
+	}
+	rh.OnAdd(svc1)
+
+	child := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "blog",
+			Namespace: svc1.Namespace,
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "www.containersteve.com",
+			},
+			Routes: []projcontour.Route{{
+				Services: []projcontour.Service{{
+					Name: svc1.Name,
+					Port: 80,
+				}},
+			}},
+		},
+	}
+	rh.OnAdd(child)
+
+	root := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "root-blog",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "blog.containersteve.com",
+			},
+			Includes: []projcontour.Include{{
+				Name:      child.Name,
+				Namespace: child.Namespace,
+			}},
+		},
+	}
+	rh.OnAdd(root)
+
+	// verify that child's route is present because while it is not possible to
+	// delegate to it, it can host www.containersteve.com.
+	assert.Equal(t, &v2.DiscoveryResponse{
+		VersionInfo: "2",
+		Resources: resources(t,
+			envoy.RouteConfiguration("ingress_http",
+				envoy.VirtualHost("www.containersteve.com",
+					envoy.Route(envoy.RoutePrefix("/"), routecluster("marketing/green/80/da39a3ee5e")),
+				),
+			),
+			envoy.RouteConfiguration("ingress_https"),
+		),
+		TypeUrl: routeType,
+		Nonce:   "2",
+	}, streamRDS(t, cc))
+}
+
+func virtualhosts(v ...*envoy_api_v2_route.VirtualHost) []*envoy_api_v2_route.VirtualHost { return v }
+
+func conditions(c ...projcontour.Condition) []projcontour.Condition { return c }
+
+func prefixCondition(prefix string) projcontour.Condition {
+	return projcontour.Condition{
+		Prefix: prefix,
+	}
+}
+
+func headerCondition(name, value, headerType string, present bool) projcontour.Condition {
+	cond := projcontour.Condition{
+		Header: &projcontour.HeaderCondition{
+			Name:    name,
+			Present: present,
+		},
+	}
+
+	switch strings.ToLower(headerType) {
+	case "contains":
+		cond.Header.Contains = value
+	case "notcontains":
+		cond.Header.NotContains = value
+	case "exact":
+		cond.Header.Exact = value
+	case "notexact":
+		cond.Header.NotExact = value
+	}
+
+	return cond
+}

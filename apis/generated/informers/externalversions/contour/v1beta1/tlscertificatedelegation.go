@@ -1,5 +1,5 @@
 /*
-Copyright 2019 Heptio
+Copyright 2019 VMware
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,10 +21,10 @@ package v1beta1
 import (
 	time "time"
 
-	contourv1beta1 "github.com/heptio/contour/apis/contour/v1beta1"
-	versioned "github.com/heptio/contour/apis/generated/clientset/versioned"
-	internalinterfaces "github.com/heptio/contour/apis/generated/informers/externalversions/internalinterfaces"
-	v1beta1 "github.com/heptio/contour/apis/generated/listers/contour/v1beta1"
+	contourv1beta1 "github.com/projectcontour/contour/apis/contour/v1beta1"
+	versioned "github.com/projectcontour/contour/apis/generated/clientset/versioned"
+	internalinterfaces "github.com/projectcontour/contour/apis/generated/informers/externalversions/internalinterfaces"
+	v1beta1 "github.com/projectcontour/contour/apis/generated/listers/contour/v1beta1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	watch "k8s.io/apimachinery/pkg/watch"

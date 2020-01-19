@@ -3,21 +3,22 @@ package contour
 import (
 	"testing"
 
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/auth"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
-	"github.com/gogo/protobuf/proto"
-	"github.com/google/go-cmp/cmp"
-	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
-	"github.com/heptio/contour/internal/dag"
+	envoy_api_v2_auth "github.com/envoyproxy/go-control-plane/envoy/api/v2/auth"
+	envoy_api_v2_core "github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
+	"github.com/golang/protobuf/proto"
+	ingressroutev1 "github.com/projectcontour/contour/apis/contour/v1beta1"
+	projcontour "github.com/projectcontour/contour/apis/projectcontour/v1"
+	"github.com/projectcontour/contour/internal/assert"
+	"github.com/projectcontour/contour/internal/dag"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/api/extensions/v1beta1"
+	"k8s.io/api/networking/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 func TestSecretCacheContents(t *testing.T) {
 	tests := map[string]struct {
-		contents map[string]*auth.Secret
+		contents map[string]*envoy_api_v2_auth.Secret
 		want     []proto.Message
 	}{
 		"empty": {
@@ -39,16 +40,14 @@ func TestSecretCacheContents(t *testing.T) {
 			var sc SecretCache
 			sc.Update(tc.contents)
 			got := sc.Contents()
-			if diff := cmp.Diff(tc.want, got); diff != "" {
-				t.Fatal(diff)
-			}
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }
 
 func TestSecretCacheQuery(t *testing.T) {
 	tests := map[string]struct {
-		contents map[string]*auth.Secret
+		contents map[string]*envoy_api_v2_auth.Secret
 		query    []string
 		want     []proto.Message
 	}{
@@ -85,9 +84,7 @@ func TestSecretCacheQuery(t *testing.T) {
 			var sc SecretCache
 			sc.Update(tc.contents)
 			got := sc.Query(tc.query)
-			if diff := cmp.Diff(tc.want, got); diff != "" {
-				t.Fatal(diff)
-			}
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }
@@ -95,18 +92,18 @@ func TestSecretCacheQuery(t *testing.T) {
 func TestSecretVisit(t *testing.T) {
 	tests := map[string]struct {
 		objs []interface{}
-		want map[string]*auth.Secret
+		want map[string]*envoy_api_v2_auth.Secret
 	}{
 		"nothing": {
 			objs: nil,
-			want: map[string]*auth.Secret{},
+			want: map[string]*envoy_api_v2_auth.Secret{},
 		},
 		"unassociated secrets": {
 			objs: []interface{}{
 				tlssecret("default", "secret-a", secretdata(CERTIFICATE, RSA_PRIVATE_KEY)),
 				tlssecret("default", "secret-b", secretdata(CERTIFICATE_2, RSA_PRIVATE_KEY)),
 			},
-			want: map[string]*auth.Secret{},
+			want: map[string]*envoy_api_v2_auth.Secret{},
 		},
 		"simple ingress with secret": {
 			objs: []interface{}{
@@ -134,10 +131,16 @@ func TestSecretVisit(t *testing.T) {
 							Hosts:      []string{"whatever.example.com"},
 							SecretName: "secret",
 						}},
-						Backend: &v1beta1.IngressBackend{
-							ServiceName: "kuard",
-							ServicePort: intstr.FromInt(8080),
-						},
+						Rules: []v1beta1.IngressRule{{
+							Host: "whatever.example.com",
+							IngressRuleValue: v1beta1.IngressRuleValue{
+								HTTP: &v1beta1.HTTPIngressRuleValue{
+									Paths: []v1beta1.HTTPIngressPath{{
+										Backend: *backend("kuard", 8080),
+									}},
+								},
+							},
+						}},
 					},
 				},
 				tlssecret("default", "secret", secretdata(CERTIFICATE, RSA_PRIVATE_KEY)),
@@ -172,10 +175,16 @@ func TestSecretVisit(t *testing.T) {
 							Hosts:      []string{"whatever.example.com"},
 							SecretName: "secret",
 						}},
-						Backend: &v1beta1.IngressBackend{
-							ServiceName: "kuard",
-							ServicePort: intstr.FromInt(8080),
-						},
+						Rules: []v1beta1.IngressRule{{
+							Host: "whatever.example.com",
+							IngressRuleValue: v1beta1.IngressRuleValue{
+								HTTP: &v1beta1.HTTPIngressRuleValue{
+									Paths: []v1beta1.HTTPIngressPath{{
+										Backend: *backend("kuard", 8080),
+									}},
+								},
+							},
+						}},
 					},
 				},
 				&v1beta1.Ingress{
@@ -188,10 +197,16 @@ func TestSecretVisit(t *testing.T) {
 							Hosts:      []string{"omg.example.com"},
 							SecretName: "secret",
 						}},
-						Backend: &v1beta1.IngressBackend{
-							ServiceName: "kuard",
-							ServicePort: intstr.FromInt(8080),
-						},
+						Rules: []v1beta1.IngressRule{{
+							Host: "omg.example.com",
+							IngressRuleValue: v1beta1.IngressRuleValue{
+								HTTP: &v1beta1.HTTPIngressRuleValue{
+									Paths: []v1beta1.HTTPIngressPath{{
+										Backend: *backend("kuard", 8080),
+									}},
+								},
+							},
+						}},
 					},
 				},
 				tlssecret("default", "secret", secretdata(CERTIFICATE, RSA_PRIVATE_KEY)),
@@ -226,10 +241,16 @@ func TestSecretVisit(t *testing.T) {
 							Hosts:      []string{"whatever.example.com"},
 							SecretName: "secret-a",
 						}},
-						Backend: &v1beta1.IngressBackend{
-							ServiceName: "kuard",
-							ServicePort: intstr.FromInt(8080),
-						},
+						Rules: []v1beta1.IngressRule{{
+							Host: "whatever.example.com",
+							IngressRuleValue: v1beta1.IngressRuleValue{
+								HTTP: &v1beta1.HTTPIngressRuleValue{
+									Paths: []v1beta1.HTTPIngressPath{{
+										Backend: *backend("kuard", 80),
+									}},
+								},
+							},
+						}},
 					},
 				},
 				&v1beta1.Ingress{
@@ -242,10 +263,16 @@ func TestSecretVisit(t *testing.T) {
 							Hosts:      []string{"omg.example.com"},
 							SecretName: "secret-b",
 						}},
-						Backend: &v1beta1.IngressBackend{
-							ServiceName: "kuard",
-							ServicePort: intstr.FromInt(8080),
-						},
+						Rules: []v1beta1.IngressRule{{
+							Host: "omg.example.com",
+							IngressRuleValue: v1beta1.IngressRuleValue{
+								HTTP: &v1beta1.HTTPIngressRuleValue{
+									Paths: []v1beta1.HTTPIngressPath{{
+										Backend: *backend("kuard", 80),
+									}},
+								},
+							},
+						}},
 					},
 				},
 				tlssecret("default", "secret-a", secretdata(CERTIFICATE, RSA_PRIVATE_KEY)),
@@ -278,9 +305,9 @@ func TestSecretVisit(t *testing.T) {
 						Namespace: "default",
 					},
 					Spec: ingressroutev1.IngressRouteSpec{
-						VirtualHost: &ingressroutev1.VirtualHost{
+						VirtualHost: &projcontour.VirtualHost{
 							Fqdn: "www.example.com",
-							TLS: &ingressroutev1.TLS{
+							TLS: &projcontour.TLS{
 								SecretName: "secret",
 							},
 						},
@@ -320,9 +347,9 @@ func TestSecretVisit(t *testing.T) {
 						Namespace: "default",
 					},
 					Spec: ingressroutev1.IngressRouteSpec{
-						VirtualHost: &ingressroutev1.VirtualHost{
+						VirtualHost: &projcontour.VirtualHost{
 							Fqdn: "www.example.com",
-							TLS: &ingressroutev1.TLS{
+							TLS: &projcontour.TLS{
 								SecretName: "secret",
 							},
 						},
@@ -340,9 +367,9 @@ func TestSecretVisit(t *testing.T) {
 						Namespace: "default",
 					},
 					Spec: ingressroutev1.IngressRouteSpec{
-						VirtualHost: &ingressroutev1.VirtualHost{
+						VirtualHost: &projcontour.VirtualHost{
 							Fqdn: "www.other.com",
-							TLS: &ingressroutev1.TLS{
+							TLS: &projcontour.TLS{
 								SecretName: "secret",
 							},
 						},
@@ -382,9 +409,9 @@ func TestSecretVisit(t *testing.T) {
 						Namespace: "default",
 					},
 					Spec: ingressroutev1.IngressRouteSpec{
-						VirtualHost: &ingressroutev1.VirtualHost{
+						VirtualHost: &projcontour.VirtualHost{
 							Fqdn: "www.example.com",
-							TLS: &ingressroutev1.TLS{
+							TLS: &projcontour.TLS{
 								SecretName: "secret-a",
 							},
 						},
@@ -402,9 +429,9 @@ func TestSecretVisit(t *testing.T) {
 						Namespace: "default",
 					},
 					Spec: ingressroutev1.IngressRouteSpec{
-						VirtualHost: &ingressroutev1.VirtualHost{
+						VirtualHost: &projcontour.VirtualHost{
 							Fqdn: "www.other.com",
-							TLS: &ingressroutev1.TLS{
+							TLS: &projcontour.TLS{
 								SecretName: "secret-b",
 							},
 						},
@@ -430,9 +457,7 @@ func TestSecretVisit(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			root := buildDAG(t, tc.objs...)
 			got := visitSecrets(root)
-			if diff := cmp.Diff(tc.want, got); diff != "" {
-				t.Fatal(diff)
-			}
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }
@@ -451,26 +476,26 @@ func buildDAG(t *testing.T, objs ...interface{}) *dag.DAG {
 	return builder.Build()
 }
 
-func secretmap(secrets ...*auth.Secret) map[string]*auth.Secret {
-	m := make(map[string]*auth.Secret)
+func secretmap(secrets ...*envoy_api_v2_auth.Secret) map[string]*envoy_api_v2_auth.Secret {
+	m := make(map[string]*envoy_api_v2_auth.Secret)
 	for _, s := range secrets {
 		m[s.Name] = s
 	}
 	return m
 }
 
-func secret(name string, data map[string][]byte) *auth.Secret {
-	return &auth.Secret{
+func secret(name string, data map[string][]byte) *envoy_api_v2_auth.Secret {
+	return &envoy_api_v2_auth.Secret{
 		Name: name,
-		Type: &auth.Secret_TlsCertificate{
-			TlsCertificate: &auth.TlsCertificate{
-				CertificateChain: &core.DataSource{
-					Specifier: &core.DataSource_InlineBytes{
+		Type: &envoy_api_v2_auth.Secret_TlsCertificate{
+			TlsCertificate: &envoy_api_v2_auth.TlsCertificate{
+				CertificateChain: &envoy_api_v2_core.DataSource{
+					Specifier: &envoy_api_v2_core.DataSource_InlineBytes{
 						InlineBytes: data[v1.TLSCertKey],
 					},
 				},
-				PrivateKey: &core.DataSource{
-					Specifier: &core.DataSource_InlineBytes{
+				PrivateKey: &envoy_api_v2_core.DataSource{
+					Specifier: &envoy_api_v2_core.DataSource_InlineBytes{
 						InlineBytes: data[v1.TLSPrivateKeyKey],
 					},
 				},
@@ -488,6 +513,13 @@ func tlssecret(namespace, name string, data map[string][]byte) *v1.Secret {
 		},
 		Type: v1.SecretTypeTLS,
 		Data: data,
+	}
+}
+
+func backend(name string, port int) *v1beta1.IngressBackend {
+	return &v1beta1.IngressBackend{
+		ServiceName: name,
+		ServicePort: intstr.FromInt(port),
 	}
 }
 

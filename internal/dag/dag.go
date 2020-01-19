@@ -1,4 +1,4 @@
-// Copyright © 2018 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,10 +17,10 @@ package dag
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/auth"
-	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
+	envoy_api_v2_auth "github.com/envoyproxy/go-control-plane/envoy/api/v2/auth"
 	v1 "k8s.io/api/core/v1"
 )
 
@@ -48,24 +48,50 @@ func (d *DAG) Statuses() map[Meta]Status {
 	return d.statuses
 }
 
-// PrefixRoute defines a Route that matches a path prefix.
-type PrefixRoute struct {
-
-	// Prefix to match.
-	Prefix string
-	Route
+type Condition interface {
+	fmt.Stringer
 }
 
-// RegexRoute defines a Route that matches a regular expression.
-type RegexRoute struct {
+// PrefixCondition matches the start of a URL.
+type PrefixCondition struct {
+	Prefix string
+}
 
-	// Regex to match.
+func (pc *PrefixCondition) String() string {
+	return "prefix: " + pc.Prefix
+}
+
+// RegexCondition matches the URL by regular expression.
+type RegexCondition struct {
 	Regex string
-	Route
+}
+
+func (rc *RegexCondition) String() string {
+	return "regex: " + rc.Regex
+}
+
+type HeaderCondition struct {
+	Name      string
+	Value     string
+	MatchType string
+	Invert    bool
+}
+
+func (hc *HeaderCondition) String() string {
+	return "header: " + hc.Name
 }
 
 // Route defines the properties of a route to a Cluster.
 type Route struct {
+
+	// PathCondition specifies a Condition to match on the request path.
+	// Must not be nil.
+	PathCondition Condition
+
+	// HeaderConditions specifies a set of additional Conditions to
+	// match on the request headers.
+	HeaderConditions []HeaderCondition
+
 	Clusters []*Cluster
 
 	// Should this route generate a 301 upgrade if accessed
@@ -84,15 +110,21 @@ type Route struct {
 
 	// Indicates that during forwarding, the matched prefix (or path) should be swapped with this value
 	PrefixRewrite string
+
+	// Mirror Policy defines the mirroring policy for this Route.
+	MirrorPolicy *MirrorPolicy
 }
 
-// TimeoutPolicy defines the timeout request/idle
+// TimeoutPolicy defines the timeout policy for a route.
 type TimeoutPolicy struct {
-	// A timeout applied to requests on this route.
+	// ResponseTimeout is the timeout applied to the response
+	// from the backend server.
 	// A timeout of zero implies "use envoy's default"
 	// A timeout of -1 represents "infinity"
-	// TODO(dfc) should this move to service?
-	Timeout time.Duration
+	ResponseTimeout time.Duration
+
+	// IdleTimeout is the timeout applied to idle connections.
+	IdleTimeout time.Duration
 }
 
 // RetryPolicy defines the retry / number / timeout options
@@ -103,11 +135,16 @@ type RetryPolicy struct {
 
 	// NumRetries specifies the allowed number of retries.
 	// Ignored if RetryOn is blank, or defaults to 1 if RetryOn is set.
-	NumRetries int
+	NumRetries uint32
 
 	// PerTryTimeout specifies the timeout per retry attempt.
 	// Ignored if RetryOn is blank.
 	PerTryTimeout time.Duration
+}
+
+// MirrorPolicy desinges the mirroring policy for a route.
+type MirrorPolicy struct {
+	Cluster *Cluster
 }
 
 // UpstreamValidation defines how to validate the certificate on the upstream service
@@ -132,64 +169,66 @@ type VirtualHost struct {
 	// as defined by RFC 3986.
 	Name string
 
-	routes map[string]Vertex
-	
 	Port int
 
-	// Service to TCP proxy all incoming connections.
-	*TCPProxy
+	routes map[string]*Route
 }
 
-func (v *VirtualHost) addRoute(route Vertex) {
+func (v *VirtualHost) addRoute(route *Route) {
 	if v.routes == nil {
-		v.routes = make(map[string]Vertex)
+		v.routes = make(map[string]*Route)
 	}
-	switch r := route.(type) {
-	case *PrefixRoute:
-		v.routes[r.Prefix] = r
-	case *RegexRoute:
-		v.routes[r.Regex] = r
-	default:
-		panic(fmt.Sprintf("unexpected route type: %T %#v", r, r))
+	v.routes[conditionsToString(route)] = route
+}
+
+func conditionsToString(r *Route) string {
+	s := []string{r.PathCondition.String()}
+	for _, cond := range r.HeaderConditions {
+		s = append(s, cond.String())
 	}
+	return strings.Join(s, ",")
 }
 
 func (v *VirtualHost) Visit(f func(Vertex)) {
 	for _, r := range v.routes {
 		f(r)
 	}
-	if v.TCPProxy != nil {
-		f(v.TCPProxy)
-	}
 }
 
 func (v *VirtualHost) Valid() bool {
-	// A VirtualHost is valid if it has at least one route,
-	// or tcp proxy is not nil.
-	return len(v.routes) > 0 || v.TCPProxy != nil
+	// A VirtualHost is valid if it has at least one route.
+	return len(v.routes) > 0
 }
 
 // A SecureVirtualHost represents a HTTP host protected by TLS.
 type SecureVirtualHost struct {
 	VirtualHost
 
-	// TLS minimum protocol version. Defaults to auth.TlsParameters_TLS_AUTO
-	MinProtoVersion auth.TlsParameters_TlsProtocol
+	// TLS minimum protocol version. Defaults to envoy_api_v2_auth.TlsParameters_TLS_AUTO
+	MinProtoVersion envoy_api_v2_auth.TlsParameters_TlsProtocol
 
 	// The cert and key for this host.
-	*Secret
+	Secret *Secret
+
+	// Service to TCP proxy all incoming connections.
+	*TCPProxy
 }
 
 func (s *SecureVirtualHost) Visit(f func(Vertex)) {
 	s.VirtualHost.Visit(f)
+	if s.TCPProxy != nil {
+		f(s.TCPProxy)
+	}
 	if s.Secret != nil {
 		f(s.Secret) // secret is not required if vhost is using tls passthrough
 	}
 }
 
 func (s *SecureVirtualHost) Valid() bool {
-	// A SecureVirtualHost is valid if it has a Secret or a TCPProxy.
-	return s.Secret != nil || s.TCPProxy != nil
+	// A SecureVirtualHost is valid if either
+	// 1. it has a secret and at least one route.
+	// 2. it has a tcpproxy, because the tcpproxy backend may negotiate TLS itself.
+	return (s.Secret != nil && len(s.routes) > 0) || s.TCPProxy != nil
 }
 
 type Visitable interface {
@@ -198,11 +237,6 @@ type Visitable interface {
 
 type Vertex interface {
 	Visitable
-}
-
-type Service interface {
-	Vertex
-	toMeta() servicemeta
 }
 
 // A Listener represents a TCP socket that accepts
@@ -216,7 +250,7 @@ type Listener struct {
 	// Port is the TCP port to listen on.
 	Port int
 
-	VirtualHosts map[string]Vertex
+	VirtualHosts []Vertex
 }
 
 func (l *Listener) Visit(f func(Vertex)) {
@@ -239,29 +273,33 @@ func (t *TCPProxy) Visit(f func(Vertex)) {
 	}
 }
 
-// TCPService represents a Kuberentes Service that speaks TCP. That's all we know.
-type TCPService struct {
+// Service represents a single Kubernetes' Service's Port.
+type Service struct {
 	Name, Namespace string
 
 	*v1.ServicePort
+
+	// Protocol is the layer 7 protocol of this service
+	// One of "", "h2", "h2c", or "tls".
+	Protocol string
 
 	// Circuit breaking limits
 
 	// Max connections is maximum number of connections
 	// that Envoy will make to the upstream cluster.
-	MaxConnections int
+	MaxConnections uint32
 
 	// MaxPendingRequests is maximum number of pending
 	// requests that Envoy will allow to the upstream cluster.
-	MaxPendingRequests int
+	MaxPendingRequests uint32
 
 	// MaxRequests is the maximum number of parallel requests that
 	// Envoy will make to the upstream cluster.
-	MaxRequests int
+	MaxRequests uint32
 
 	// MaxRetries is the maximum number of parallel retries that
 	// Envoy will allow to the upstream cluster.
-	MaxRetries int
+	MaxRetries uint32
 
 	// ExternalName is an optional field referencing a dns entry for Service type "ExternalName"
 	ExternalName string
@@ -273,7 +311,7 @@ type servicemeta struct {
 	port      int32
 }
 
-func (s *TCPService) toMeta() servicemeta {
+func (s *Service) toMeta() servicemeta {
 	return servicemeta{
 		name:      s.Name,
 		namespace: s.Namespace,
@@ -281,8 +319,8 @@ func (s *TCPService) toMeta() servicemeta {
 	}
 }
 
-func (s *TCPService) Visit(func(Vertex)) {
-	// TCPServices are leaves in the DAG.
+func (s *Service) Visit(func(Vertex)) {
+	// Services are leaves in the DAG.
 }
 
 // Cluster holds the connetion specific parameters that apply to
@@ -291,33 +329,24 @@ type Cluster struct {
 
 	// Upstream is the backend Kubernetes service traffic arriving
 	// at this Cluster will be forwarded too.
-	Upstream Service
+	Upstream *Service
 
 	// The relative weight of this Cluster compared to its siblings.
-	Weight int
+	Weight uint32
 
 	// UpstreamValidation defines how to verify the backend service's certificate
 	UpstreamValidation *UpstreamValidation
 
 	// The load balancer type to use when picking a host in the cluster.
 	// See https://www.envoyproxy.io/docs/envoy/latest/api-v2/api/v2/cds.proto#envoy-api-enum-cluster-lbpolicy
-	LoadBalancerStrategy string
+	LoadBalancerPolicy string
 
-	HealthCheck *ingressroutev1.HealthCheck
+	// Cluster health check policy.
+	*HealthCheckPolicy
 }
 
 func (c Cluster) Visit(f func(Vertex)) {
 	f(c.Upstream)
-}
-
-// HTTPService represents a Kuberneres Service object which speaks
-// HTTP/1.1 or HTTP/2.0.
-type HTTPService struct {
-	TCPService
-
-	// Protocol is the layer 7 protocol of this service
-	// One of "", "h2", "h2c", or "tls".
-	Protocol string
 }
 
 // Secret represents a K8s Secret for TLS usage as a DAG Vertex. A Secret is
@@ -345,9 +374,12 @@ func (s *Secret) PrivateKey() []byte {
 	return s.Object.Data[v1.TLSPrivateKeyKey]
 }
 
-func (s *Secret) toMeta() Meta {
-	return Meta{
-		name:      s.Name(),
-		namespace: s.Namespace(),
-	}
+// Cluster health check policy.
+type HealthCheckPolicy struct {
+	Path               string
+	Host               string
+	Interval           time.Duration
+	Timeout            time.Duration
+	UnhealthyThreshold uint32
+	HealthyThreshold   uint32
 }

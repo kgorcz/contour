@@ -1,4 +1,4 @@
-// Copyright © 2018 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -24,15 +24,17 @@ import (
 	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v2"
 	envoy "github.com/envoyproxy/go-control-plane/pkg/cache"
-	"github.com/gogo/protobuf/proto"
-	"github.com/gogo/protobuf/types"
-	"github.com/heptio/contour/apis/generated/clientset/versioned/fake"
-	"github.com/heptio/contour/internal/contour"
-	"github.com/heptio/contour/internal/dag"
-	cgrpc "github.com/heptio/contour/internal/grpc"
-	"github.com/heptio/contour/internal/k8s"
-	"github.com/heptio/contour/internal/metrics"
-	"github.com/heptio/contour/internal/workgroup"
+	"github.com/golang/protobuf/proto"
+	"github.com/golang/protobuf/ptypes"
+	"github.com/golang/protobuf/ptypes/any"
+	"github.com/projectcontour/contour/apis/generated/clientset/versioned/fake"
+	"github.com/projectcontour/contour/internal/assert"
+	"github.com/projectcontour/contour/internal/contour"
+	"github.com/projectcontour/contour/internal/dag"
+	cgrpc "github.com/projectcontour/contour/internal/grpc"
+	"github.com/projectcontour/contour/internal/k8s"
+	"github.com/projectcontour/contour/internal/metrics"
+	"github.com/projectcontour/contour/internal/workgroup"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -78,9 +80,6 @@ func setup(t *testing.T, opts ...func(*contour.EventHandler)) (cache.ResourceEve
 
 	r := prometheus.NewRegistry()
 	ch := &contour.CacheHandler{
-		IngressRouteStatus: &k8s.IngressRouteStatus{
-			Client: fake.NewSimpleClientset(),
-		},
 		Metrics:       metrics.NewMetrics(r),
 		ListenerCache: contour.NewListenerCache(statsAddress, statsPort),
 		FieldLogger:   log,
@@ -94,7 +93,10 @@ func setup(t *testing.T, opts ...func(*contour.EventHandler)) (cache.ResourceEve
 				FieldLogger: log,
 			},
 		},
-		CacheHandler:    ch,
+		CacheHandler: ch,
+		CRDStatus: &k8s.CRDStatus{
+			Client: fake.NewSimpleClientset(),
+		},
 		Metrics:         ch.Metrics,
 		FieldLogger:     log,
 		Sequence:        make(chan int, 1),
@@ -117,7 +119,7 @@ func setup(t *testing.T, opts ...func(*contour.EventHandler)) (cache.ResourceEve
 		ch.ListenerCache.TypeURL(): &ch.ListenerCache,
 		ch.SecretCache.TypeURL():   &ch.SecretCache,
 		et.TypeURL():               et,
-	})
+	}, r)
 
 	var g workgroup.Group
 
@@ -206,23 +208,20 @@ func check(t *testing.T, err error) {
 	}
 }
 
-func resources(t *testing.T, protos ...proto.Message) []types.Any {
+func resources(t *testing.T, protos ...proto.Message) []*any.Any {
 	t.Helper()
-	if len(protos) == 0 {
-		return nil
-	}
-	anys := make([]types.Any, len(protos))
-	for i, a := range protos {
-		anys[i] = any(t, a)
+	var anys []*any.Any
+	for _, a := range protos {
+		anys = append(anys, toAny(t, a))
 	}
 	return anys
 }
 
-func any(t *testing.T, pb proto.Message) types.Any {
+func toAny(t *testing.T, pb proto.Message) *any.Any {
 	t.Helper()
-	any, err := types.MarshalAny(pb)
+	a, err := ptypes.MarshalAny(pb)
 	check(t, err)
-	return *any
+	return a
 }
 
 type grpcStream interface {
@@ -288,21 +287,5 @@ type Response struct {
 
 func (r *Response) Equals(want *v2.DiscoveryResponse) {
 	r.Helper()
-	assertEqual(r.T, want, r.DiscoveryResponse)
+	assert.Equal(r.T, want, r.DiscoveryResponse)
 }
-
-func assertEqual(t *testing.T, want, got *v2.DiscoveryResponse) {
-	t.Helper()
-	m := proto.TextMarshaler{Compact: true, ExpandAny: true}
-	a := m.Text(want)
-	b := m.Text(got)
-	if a != b {
-		m := proto.TextMarshaler{
-			Compact:   false,
-			ExpandAny: true,
-		}
-		t.Fatalf("\nexpected:\n%v\ngot:\n%v", m.Text(want), m.Text(got))
-	}
-}
-
-func u32(val int) *types.UInt32Value { return &types.UInt32Value{Value: uint32(val)} }

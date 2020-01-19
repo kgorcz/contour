@@ -1,4 +1,4 @@
-// Copyright © 2018 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -52,12 +52,4 @@ func addresses(ips ...string) []v1.EndpointAddress {
 		addrs = append(addrs, v1.EndpointAddress{IP: ip})
 	}
 	return addrs
-}
-
-func ports(ps ...int32) []v1.EndpointPort {
-	var ports []v1.EndpointPort
-	for _, p := range ps {
-		ports = append(ports, v1.EndpointPort{Port: p})
-	}
-	return ports
 }

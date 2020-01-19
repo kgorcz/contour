@@ -1,4 +1,4 @@
-// Copyright © 2019 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -18,8 +18,9 @@ import (
 
 	accesslog_v2 "github.com/envoyproxy/go-control-plane/envoy/config/accesslog/v2"
 	envoy_accesslog "github.com/envoyproxy/go-control-plane/envoy/config/filter/accesslog/v2"
-	"github.com/envoyproxy/go-control-plane/pkg/util"
-	"github.com/google/go-cmp/cmp"
+	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
+	_struct "github.com/golang/protobuf/ptypes/struct"
+	"github.com/projectcontour/contour/internal/assert"
 )
 
 func TestFileAccessLog(t *testing.T) {
@@ -30,9 +31,9 @@ func TestFileAccessLog(t *testing.T) {
 		"stdout": {
 			path: "/dev/stdout",
 			want: []*envoy_accesslog.AccessLog{{
-				Name: util.FileAccessLog,
+				Name: wellknown.FileAccessLog,
 				ConfigType: &envoy_accesslog.AccessLog_TypedConfig{
-					TypedConfig: any(&accesslog_v2.FileAccessLog{
+					TypedConfig: toAny(&accesslog_v2.FileAccessLog{
 						Path: "/dev/stdout",
 					}),
 				},
@@ -41,10 +42,68 @@ func TestFileAccessLog(t *testing.T) {
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := FileAccessLog(tc.path)
-			if diff := cmp.Diff(tc.want, got); diff != "" {
-				t.Fatal(diff)
-			}
+			got := FileAccessLogEnvoy(tc.path)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestJSONFileAccessLog(t *testing.T) {
+	tests := map[string]struct {
+		path    string
+		headers []string
+		want    []*envoy_accesslog.AccessLog
+	}{
+		"only timestamp": {
+			path:    "/dev/stdout",
+			headers: []string{"@timestamp"},
+			want: []*envoy_accesslog.AccessLog{{
+				Name: wellknown.FileAccessLog,
+				ConfigType: &envoy_accesslog.AccessLog_TypedConfig{
+					TypedConfig: toAny(&accesslog_v2.FileAccessLog{
+						Path: "/dev/stdout",
+						AccessLogFormat: &accesslog_v2.FileAccessLog_JsonFormat{
+							JsonFormat: &_struct.Struct{
+								Fields: map[string]*_struct.Value{
+									"@timestamp": sv("%START_TIME%"),
+								},
+							},
+						},
+					}),
+				},
+			},
+			},
+		},
+		"invalid header should disappear": {
+			path: "/dev/stdout",
+			headers: []string{
+				"@timestamp",
+				"invalid",
+				"method",
+			},
+			want: []*envoy_accesslog.AccessLog{{
+				Name: wellknown.FileAccessLog,
+				ConfigType: &envoy_accesslog.AccessLog_TypedConfig{
+					TypedConfig: toAny(&accesslog_v2.FileAccessLog{
+						Path: "/dev/stdout",
+						AccessLogFormat: &accesslog_v2.FileAccessLog_JsonFormat{
+							JsonFormat: &_struct.Struct{
+								Fields: map[string]*_struct.Value{
+									"@timestamp": sv(JSONFields["@timestamp"]),
+									"method":     sv(JSONFields["method"]),
+								},
+							},
+						},
+					}),
+				},
+			},
+			},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := FileAccessLogJSON(tc.path, tc.headers)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright © 2018 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,11 +14,16 @@
 package dag
 
 import (
+	"bytes"
+	"encoding/json"
+
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/api/extensions/v1beta1"
+	extensionsv1beta1 "k8s.io/api/extensions/v1beta1"
+	"k8s.io/api/networking/v1beta1"
 	"k8s.io/client-go/tools/cache"
 
-	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
+	ingressroutev1 "github.com/projectcontour/contour/apis/contour/v1beta1"
+	projectcontour "github.com/projectcontour/contour/apis/projectcontour/v1"
 	"github.com/sirupsen/logrus"
 )
 
@@ -27,20 +32,22 @@ const DEFAULT_INGRESS_CLASS = "contour"
 // A KubernetesCache holds Kubernetes objects and associated configuration and produces
 // DAG values.
 type KubernetesCache struct {
-	// IngressRouteRootNamespaces specifies the namespaces where root
+	// RootNamespaces specifies the namespaces where root
 	// IngressRoutes can be defined. If empty, roots can be defined in any
 	// namespace.
-	IngressRouteRootNamespaces []string
+	RootNamespaces []string
 
 	// Contour's IngressClass.
 	// If not set, defaults to DEFAULT_INGRESS_CLASS.
 	IngressClass string
 
-	ingresses     map[Meta]*v1beta1.Ingress
-	ingressroutes map[Meta]*ingressroutev1.IngressRoute
-	secrets       map[Meta]*v1.Secret
-	delegations   map[Meta]*ingressroutev1.TLSCertificateDelegation
-	services      map[Meta]*v1.Service
+	ingresses            map[Meta]*v1beta1.Ingress
+	ingressroutes        map[Meta]*ingressroutev1.IngressRoute
+	httpproxies          map[Meta]*projectcontour.HTTPProxy
+	secrets              map[Meta]*v1.Secret
+	irdelegations        map[Meta]*ingressroutev1.TLSCertificateDelegation
+	httpproxydelegations map[Meta]*projectcontour.TLSCertificateDelegation
+	services             map[Meta]*v1.Service
 
 	logrus.FieldLogger
 }
@@ -48,6 +55,14 @@ type KubernetesCache struct {
 // Meta holds the name and namespace of a Kubernetes object.
 type Meta struct {
 	name, namespace string
+}
+
+func toMeta(obj Object) Meta {
+	m := obj.GetObjectMeta()
+	return Meta{
+		name:      m.GetName(),
+		namespace: m.GetNamespace(),
+	}
 }
 
 // Insert inserts obj into the KubernetesCache.
@@ -60,57 +75,87 @@ func (kc *KubernetesCache) Insert(obj interface{}) bool {
 		valid, err := isValidSecret(obj)
 		if !valid {
 			if err != nil {
-				kc.WithField("name", obj.Name).
-					WithField("namespace", obj.Namespace).
-					WithField("kind", obj.Kind).
-					WithField("version", obj.APIVersion).
+				om := obj.GetObjectMeta()
+				kc.WithField("name", om.GetName()).
+					WithField("namespace", om.GetNamespace()).
+					WithField("kind", "Secret").
+					WithField("version", "v1").
 					Error(err)
 			}
 			return false
 		}
 
-		m := Meta{name: obj.Name, namespace: obj.Namespace}
+		m := toMeta(obj)
 		if kc.secrets == nil {
 			kc.secrets = make(map[Meta]*v1.Secret)
 		}
 		kc.secrets[m] = obj
 		return kc.secretTriggersRebuild(obj)
 	case *v1.Service:
-		m := Meta{name: obj.Name, namespace: obj.Namespace}
+		m := toMeta(obj)
 		if kc.services == nil {
 			kc.services = make(map[Meta]*v1.Service)
 		}
 		kc.services[m] = obj
 		return kc.serviceTriggersRebuild(obj)
 	case *v1beta1.Ingress:
-		class := getIngressClassAnnotation(obj.Annotations)
+		class := ingressClass(obj)
 		if class != "" && class != kc.ingressClass() {
 			return false
 		}
-		m := Meta{name: obj.Name, namespace: obj.Namespace}
+		m := toMeta(obj)
 		if kc.ingresses == nil {
 			kc.ingresses = make(map[Meta]*v1beta1.Ingress)
 		}
 		kc.ingresses[m] = obj
 		return true
+	case *extensionsv1beta1.Ingress:
+		ingress := new(v1beta1.Ingress)
+		if err := transposeIngress(obj, ingress); err != nil {
+			om := obj.GetObjectMeta()
+			kc.WithField("name", om.GetName()).
+				WithField("namespace", om.GetNamespace()).
+				Error(err)
+			return false
+		}
+		return kc.Insert(ingress)
 	case *ingressroutev1.IngressRoute:
-		class := getIngressClassAnnotation(obj.Annotations)
+		class := ingressClass(obj)
 		if class != "" && class != kc.ingressClass() {
 			return false
 		}
-		m := Meta{name: obj.Name, namespace: obj.Namespace}
+		m := toMeta(obj)
 		if kc.ingressroutes == nil {
 			kc.ingressroutes = make(map[Meta]*ingressroutev1.IngressRoute)
 		}
 		kc.ingressroutes[m] = obj
 		return true
-	case *ingressroutev1.TLSCertificateDelegation:
-		m := Meta{name: obj.Name, namespace: obj.Namespace}
-		if kc.delegations == nil {
-			kc.delegations = make(map[Meta]*ingressroutev1.TLSCertificateDelegation)
+	case *projectcontour.HTTPProxy:
+		class := ingressClass(obj)
+		if class != "" && class != kc.ingressClass() {
+			return false
 		}
-		kc.delegations[m] = obj
+		m := toMeta(obj)
+		if kc.httpproxies == nil {
+			kc.httpproxies = make(map[Meta]*projectcontour.HTTPProxy)
+		}
+		kc.httpproxies[m] = obj
 		return true
+	case *ingressroutev1.TLSCertificateDelegation:
+		m := toMeta(obj)
+		if kc.irdelegations == nil {
+			kc.irdelegations = make(map[Meta]*ingressroutev1.TLSCertificateDelegation)
+		}
+		kc.irdelegations[m] = obj
+		return true
+	case *projectcontour.TLSCertificateDelegation:
+		m := toMeta(obj)
+		if kc.httpproxydelegations == nil {
+			kc.httpproxydelegations = make(map[Meta]*projectcontour.TLSCertificateDelegation)
+		}
+		kc.httpproxydelegations[m] = obj
+		return true
+
 	default:
 		// not an interesting object
 		kc.WithField("object", obj).Error("insert unknown object")
@@ -125,7 +170,7 @@ func (kc *KubernetesCache) ingressClass() string {
 }
 
 // Remove removes obj from the KubernetesCache.
-// Remove returns a boolean indiciating if the cache changed after the remove operation.
+// Remove returns a boolean indicating if the cache changed after the remove operation.
 func (kc *KubernetesCache) Remove(obj interface{}) bool {
 	switch obj := obj.(type) {
 	default:
@@ -138,29 +183,44 @@ func (kc *KubernetesCache) Remove(obj interface{}) bool {
 func (kc *KubernetesCache) remove(obj interface{}) bool {
 	switch obj := obj.(type) {
 	case *v1.Secret:
-		m := Meta{name: obj.Name, namespace: obj.Namespace}
+		m := toMeta(obj)
 		_, ok := kc.secrets[m]
 		delete(kc.secrets, m)
 		return ok
 	case *v1.Service:
-		m := Meta{name: obj.Name, namespace: obj.Namespace}
+		m := toMeta(obj)
 		_, ok := kc.services[m]
 		delete(kc.services, m)
 		return ok
 	case *v1beta1.Ingress:
-		m := Meta{name: obj.Name, namespace: obj.Namespace}
+		m := toMeta(obj)
+		_, ok := kc.ingresses[m]
+		delete(kc.ingresses, m)
+		return ok
+	case *extensionsv1beta1.Ingress:
+		m := toMeta(obj)
 		_, ok := kc.ingresses[m]
 		delete(kc.ingresses, m)
 		return ok
 	case *ingressroutev1.IngressRoute:
-		m := Meta{name: obj.Name, namespace: obj.Namespace}
+		m := toMeta(obj)
 		_, ok := kc.ingressroutes[m]
 		delete(kc.ingressroutes, m)
 		return ok
+	case *projectcontour.HTTPProxy:
+		m := toMeta(obj)
+		_, ok := kc.httpproxies[m]
+		delete(kc.httpproxies, m)
+		return ok
 	case *ingressroutev1.TLSCertificateDelegation:
-		m := Meta{name: obj.Name, namespace: obj.Namespace}
-		_, ok := kc.delegations[m]
-		delete(kc.delegations, m)
+		m := toMeta(obj)
+		_, ok := kc.irdelegations[m]
+		delete(kc.irdelegations, m)
+		return ok
+	case *projectcontour.TLSCertificateDelegation:
+		m := toMeta(obj)
+		_, ok := kc.httpproxydelegations[m]
+		delete(kc.httpproxydelegations, m)
 		return ok
 	default:
 		// not interesting
@@ -214,6 +274,27 @@ func (kc *KubernetesCache) serviceTriggersRebuild(service *v1.Service) bool {
 			}
 		}
 	}
+
+	for _, ir := range kc.httpproxies {
+		if ir.Namespace != service.Namespace {
+			continue
+		}
+		for _, route := range ir.Spec.Routes {
+			for _, s := range route.Services {
+				if s.Name == service.Name {
+					return true
+				}
+			}
+		}
+		if tcpproxy := ir.Spec.TCPProxy; tcpproxy != nil {
+			for _, s := range tcpproxy.Services {
+				if s.Name == service.Name {
+					return true
+				}
+			}
+		}
+	}
+
 	return false
 }
 
@@ -231,7 +312,16 @@ func (kc *KubernetesCache) secretTriggersRebuild(secret *v1.Secret) bool {
 	}
 
 	delegations := make(map[string]bool) // targetnamespace/secretname to bool
-	for _, d := range kc.delegations {
+
+	// merge ingressroute.TLSCertificateDelegation and projectcontour.TLSCertificateDelegation.
+	for _, d := range kc.irdelegations {
+		for _, cd := range d.Spec.Delegations {
+			for _, n := range cd.TargetNamespaces {
+				delegations[n+"/"+cd.SecretName] = true
+			}
+		}
+	}
+	for _, d := range kc.httpproxydelegations {
 		for _, cd := range d.Spec.Delegations {
 			for _, n := range cd.TargetNamespaces {
 				delegations[n+"/"+cd.SecretName] = true
@@ -290,5 +380,45 @@ func (kc *KubernetesCache) secretTriggersRebuild(secret *v1.Secret) bool {
 			}
 		}
 	}
+
+	for _, proxy := range kc.httpproxies {
+		vh := proxy.Spec.VirtualHost
+		if vh == nil {
+			// not a root ingress
+			continue
+		}
+		tls := vh.TLS
+		if tls == nil {
+			// no tls spec
+			continue
+		}
+
+		if proxy.Namespace == secret.Namespace && tls.SecretName == secret.Name {
+			return true
+		}
+		if delegations[proxy.Namespace+"/"+secret.Name] {
+			if tls.SecretName == secret.Namespace+"/"+secret.Name {
+				return true
+			}
+		}
+		if delegations["*/"+secret.Name] {
+			if tls.SecretName == secret.Namespace+"/"+secret.Name {
+				return true
+			}
+		}
+	}
+
 	return false
+}
+
+// transposeIngress transposes extensionis/v1beta1.Ingress objects into
+// networking/v1beta1.Ingress objects.
+func transposeIngress(src *extensionsv1beta1.Ingress, dst *v1beta1.Ingress) error {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	if err := enc.Encode(src); err != nil {
+		return nil
+	}
+	dec := json.NewDecoder(&buf)
+	return dec.Decode(dst)
 }

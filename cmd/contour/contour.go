@@ -1,4 +1,4 @@
-// Copyright © 2017 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -18,7 +18,7 @@ import (
 	"os"
 
 	"github.com/envoyproxy/go-control-plane/pkg/cache"
-	clientset "github.com/heptio/contour/apis/generated/clientset/versioned"
+	clientset "github.com/projectcontour/contour/apis/generated/clientset/versioned"
 	"github.com/sirupsen/logrus"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 	"k8s.io/client-go/kubernetes"
@@ -39,13 +39,13 @@ func init() {
 func main() {
 
 	log := logrus.StandardLogger()
-	app := kingpin.New("contour", "Heptio Contour Kubernetes ingress controller.")
+	app := kingpin.New("contour", "Contour Kubernetes ingress controller.")
 
 	bootstrap, bootstrapCtx := registerBootstrap(app)
 
 	certgenApp, certgenConfig := registerCertGen(app)
 
-	cli := app.Command("cli", "A CLI client for the Heptio Contour Kubernetes ingress controller.")
+	cli := app.Command("cli", "A CLI client for the Contour Kubernetes ingress controller.")
 	var client Client
 	cli.Flag("contour", "contour host:port.").Default("127.0.0.1:8001").StringVar(&client.ContourAddr)
 	cli.Flag("cafile", "CA bundle file for connecting to a TLS-secured Contour").Envar("CLI_CAFILE").StringVar(&client.CAFile)

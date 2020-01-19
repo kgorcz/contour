@@ -1,4 +1,4 @@
-// Copyright © 2018 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -21,7 +21,7 @@ import (
 	"testing"
 
 	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
-	"github.com/gogo/protobuf/proto"
+	"github.com/golang/protobuf/proto"
 	"github.com/sirupsen/logrus"
 )
 
@@ -167,10 +167,10 @@ type mockResource struct {
 	typeurl  func() string
 }
 
-func (m *mockResource) Contents() []proto.Message            { return m.contents() }
-func (m *mockResource) Query(names []string) []proto.Message { return m.query(names) }
-func (m *mockResource) Register(ch chan int, last int)       { m.register(ch, last) }
-func (m *mockResource) TypeURL() string                      { return m.typeurl() }
+func (m *mockResource) Contents() []proto.Message                       { return m.contents() }
+func (m *mockResource) Query(names []string) []proto.Message            { return m.query(names) }
+func (m *mockResource) Register(ch chan int, last int, hints ...string) { m.register(ch, last) }
+func (m *mockResource) TypeURL() string                                 { return m.typeurl() }
 
 func TestCounterNext(t *testing.T) {
 	var c counter

@@ -1,4 +1,4 @@
-// Copyright © 2019 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -24,14 +24,9 @@ func TestVirtualHostValid(t *testing.T) {
 	assert.False(vh.Valid())
 
 	vh = VirtualHost{
-		routes: map[string]Vertex{
-			"/": &Route{},
+		routes: map[string]*Route{
+			"/": {},
 		},
-	}
-	assert.True(vh.Valid())
-
-	vh = VirtualHost{
-		TCPProxy: new(TCPProxy),
 	}
 	assert.True(vh.Valid())
 }
@@ -45,12 +40,12 @@ func TestSecureVirtualHostValid(t *testing.T) {
 	vh = SecureVirtualHost{
 		Secret: new(Secret),
 	}
-	assert.True(vh.Valid())
+	assert.False(vh.Valid())
 
 	vh = SecureVirtualHost{
 		VirtualHost: VirtualHost{
-			routes: map[string]Vertex{
-				"/": &Route{},
+			routes: map[string]*Route{
+				"/": {},
 			},
 		},
 	}
@@ -59,25 +54,21 @@ func TestSecureVirtualHostValid(t *testing.T) {
 	vh = SecureVirtualHost{
 		Secret: new(Secret),
 		VirtualHost: VirtualHost{
-			routes: map[string]Vertex{
-				"/": &Route{},
+			routes: map[string]*Route{
+				"/": {},
 			},
 		},
 	}
 	assert.True(vh.Valid())
 
 	vh = SecureVirtualHost{
-		VirtualHost: VirtualHost{
-			TCPProxy: new(TCPProxy),
-		},
+		TCPProxy: new(TCPProxy),
 	}
 	assert.True(vh.Valid())
 
 	vh = SecureVirtualHost{
-		Secret: new(Secret),
-		VirtualHost: VirtualHost{
-			TCPProxy: new(TCPProxy),
-		},
+		Secret:   new(Secret),
+		TCPProxy: new(TCPProxy),
 	}
 	assert.True(vh.Valid())
 }

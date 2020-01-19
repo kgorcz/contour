@@ -1,4 +1,4 @@
-// Copyright © 2018 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -19,8 +19,8 @@ import (
 	"net/http"
 	"net/http/pprof"
 
-	"github.com/heptio/contour/internal/dag"
-	"github.com/heptio/contour/internal/httpsvc"
+	"github.com/projectcontour/contour/internal/dag"
+	"github.com/projectcontour/contour/internal/httpsvc"
 )
 
 // Service serves various http endpoints including /debug/pprof.

@@ -1,4 +1,4 @@
-// Copyright © 2019 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,12 +17,11 @@ import (
 	"testing"
 
 	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/auth"
-	"github.com/gogo/protobuf/types"
-	"github.com/heptio/contour/internal/dag"
-	"github.com/heptio/contour/internal/envoy"
+	envoy_api_v2_auth "github.com/envoyproxy/go-control-plane/envoy/api/v2/auth"
+	"github.com/projectcontour/contour/internal/dag"
+	"github.com/projectcontour/contour/internal/envoy"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/api/extensions/v1beta1"
+	"k8s.io/api/networking/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
@@ -52,7 +51,7 @@ func TestSDSVisibility(t *testing.T) {
 	// not referenced by any ingress/ingressroute
 	c.Request(secretType).Equals(&v2.DiscoveryResponse{
 		VersionInfo: "0",
-		Resources:   []types.Any{},
+		Resources:   resources(t),
 		TypeUrl:     secretType,
 		Nonce:       "0",
 	})
@@ -64,21 +63,28 @@ func TestSDSVisibility(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: v1beta1.IngressSpec{
-			Backend: backend("backend", intstr.FromInt(80)),
 			TLS: []v1beta1.IngressTLS{{
 				Hosts:      []string{"kuard.example.com"},
 				SecretName: "secret",
+			}},
+			Rules: []v1beta1.IngressRule{{
+				Host: "kuard.example.com",
+				IngressRuleValue: v1beta1.IngressRuleValue{
+					HTTP: &v1beta1.HTTPIngressRuleValue{
+						Paths: []v1beta1.HTTPIngressPath{{
+							Backend: *backend("backend", intstr.FromInt(80)),
+						}},
+					},
+				},
 			}},
 		},
 	}
 	rh.OnAdd(i1)
 
-	// TODO(dfc) #1165: secret should not be present if the ingress does not
-	// have any valid routes.
 	// i1 has a default route to backend:80, but there is no matching service.
 	c.Request(secretType).Equals(&v2.DiscoveryResponse{
 		VersionInfo: "1",
-		Resources:   resources(t, secret(s1)),
+		Resources:   resources(t),
 		TypeUrl:     secretType,
 		Nonce:       "1",
 	})
@@ -112,30 +118,53 @@ func TestSDSShouldNotIncrementVersionNumberForUnrelatedSecret(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: v1beta1.IngressSpec{
-			Backend: backend("backend", intstr.FromInt(80)),
 			TLS: []v1beta1.IngressTLS{{
 				Hosts:      []string{"kuard.example.com"},
 				SecretName: "secret",
+			}},
+			Rules: []v1beta1.IngressRule{{
+				Host: "kuard.example.com",
+				IngressRuleValue: v1beta1.IngressRuleValue{
+					HTTP: &v1beta1.HTTPIngressRuleValue{
+						Paths: []v1beta1.HTTPIngressPath{{
+							Backend: *backend("backend", intstr.FromInt(80)),
+						}},
+					},
+				},
 			}},
 		},
 	}
 	rh.OnAdd(i1)
 
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "backend",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:     "http",
+				Protocol: "TCP",
+				Port:     80,
+			}},
+		},
+	})
+
 	c.Request(secretType).Equals(&v2.DiscoveryResponse{
-		VersionInfo: "1",
+		VersionInfo: "2",
 		Resources:   resources(t, secret(s1)),
 		TypeUrl:     secretType,
-		Nonce:       "1",
+		Nonce:       "2",
 	})
 
 	// verify that requesting the same resource without change
 	// does not bump the current version_info.
 
 	c.Request(secretType).Equals(&v2.DiscoveryResponse{
-		VersionInfo: "1",
+		VersionInfo: "2",
 		Resources:   resources(t, secret(s1)),
 		TypeUrl:     secretType,
-		Nonce:       "1",
+		Nonce:       "2",
 	})
 
 	// s2 is not referenced by any active ingress object.
@@ -150,10 +179,10 @@ func TestSDSShouldNotIncrementVersionNumberForUnrelatedSecret(t *testing.T) {
 	rh.OnAdd(s2)
 
 	c.Request(secretType).Equals(&v2.DiscoveryResponse{
-		VersionInfo: "1",
+		VersionInfo: "2",
 		Resources:   resources(t, secret(s1)),
 		TypeUrl:     secretType,
-		Nonce:       "1",
+		Nonce:       "2",
 	})
 }
 
@@ -189,10 +218,19 @@ func TestSDSshouldNotPublishInvalidSecret(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: v1beta1.IngressSpec{
-			Backend: backend("backend", intstr.FromInt(80)),
 			TLS: []v1beta1.IngressTLS{{
 				Hosts:      []string{"kuard.example.com"},
 				SecretName: "invalid",
+			}},
+			Rules: []v1beta1.IngressRule{{
+				Host: "kuard.example.com",
+				IngressRuleValue: v1beta1.IngressRuleValue{
+					HTTP: &v1beta1.HTTPIngressRuleValue{
+						Paths: []v1beta1.HTTPIngressPath{{
+							Backend: *backend("backend", intstr.FromInt(80)),
+						}},
+					},
+				},
 			}},
 		},
 	}
@@ -201,13 +239,13 @@ func TestSDSshouldNotPublishInvalidSecret(t *testing.T) {
 	// SDS should be empty
 	c.Request(secretType).Equals(&v2.DiscoveryResponse{
 		VersionInfo: "1",
-		Resources:   []types.Any{},
+		Resources:   resources(t),
 		TypeUrl:     secretType,
 		Nonce:       "1",
 	})
 }
 
-func secret(sec *v1.Secret) *auth.Secret {
+func secret(sec *v1.Secret) *envoy_api_v2_auth.Secret {
 	return envoy.Secret(&dag.Secret{
 		Object: sec,
 	})

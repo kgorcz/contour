@@ -1,4 +1,4 @@
-// Copyright © 2019 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,13 +17,163 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/go-cmp/cmp"
-	"github.com/heptio/contour/apis/contour/v1beta1"
+	ingressroutev1 "github.com/projectcontour/contour/apis/contour/v1beta1"
+	projcontour "github.com/projectcontour/contour/apis/projectcontour/v1"
+	"github.com/projectcontour/contour/internal/assert"
+	"k8s.io/api/networking/v1beta1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestRetryPolicyIngress(t *testing.T) {
+	tests := map[string]struct {
+		i    *v1beta1.Ingress
+		want *RetryPolicy
+	}{
+		"no anotations": {
+			i:    &v1beta1.Ingress{},
+			want: nil,
+		},
+		"retry-on": {
+			i: &v1beta1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"projectcontour.io/retry-on": "5xx",
+					},
+				},
+			},
+			want: &RetryPolicy{
+				RetryOn: "5xx",
+			},
+		},
+		"explicitly zero retries": {
+			i: &v1beta1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"projectcontour.io/retry-on":    "5xx",
+						"projectcontour.io/num-retries": "0",
+					},
+				},
+			},
+			want: &RetryPolicy{
+				RetryOn:    "5xx",
+				NumRetries: 0,
+			},
+		},
+		"legacy explicitly zero retries": {
+			i: &v1beta1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"projectcontour.io/retry-on":     "5xx",
+						"contour.heptio.com/num-retries": "0",
+					},
+				},
+			},
+			want: &RetryPolicy{
+				RetryOn:    "5xx",
+				NumRetries: 0,
+			},
+		},
+		"num-retries": {
+			i: &v1beta1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"projectcontour.io/retry-on":    "5xx",
+						"projectcontour.io/num-retries": "7",
+					},
+				},
+			},
+			want: &RetryPolicy{
+				RetryOn:    "5xx",
+				NumRetries: 7,
+			},
+		},
+		"legacy num-retries": {
+			i: &v1beta1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"projectcontour.io/retry-on":     "5xx",
+						"contour.heptio.com/num-retries": "7",
+					},
+				},
+			},
+			want: &RetryPolicy{
+				RetryOn:    "5xx",
+				NumRetries: 7,
+			},
+		},
+		"no retry count, per try timeout": {
+			i: &v1beta1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"projectcontour.io/retry-on":        "5xx",
+						"projectcontour.io/per-try-timeout": "10s",
+					},
+				},
+			},
+			want: &RetryPolicy{
+				RetryOn:       "5xx",
+				NumRetries:    0,
+				PerTryTimeout: 10 * time.Second,
+			},
+		},
+		"no retry count, legacy per try timeout": {
+			i: &v1beta1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"projectcontour.io/retry-on":         "5xx",
+						"contour.heptio.com/per-try-timeout": "10s",
+					},
+				},
+			},
+			want: &RetryPolicy{
+				RetryOn:       "5xx",
+				NumRetries:    0,
+				PerTryTimeout: 10 * time.Second,
+			},
+		},
+		"explicit 0s timeout": {
+			i: &v1beta1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"projectcontour.io/retry-on":        "5xx",
+						"projectcontour.io/per-try-timeout": "0s",
+					},
+				},
+			},
+			want: &RetryPolicy{
+				RetryOn:       "5xx",
+				NumRetries:    0,
+				PerTryTimeout: 0 * time.Second,
+			},
+		},
+		"legacy explicit 0s timeout": {
+			i: &v1beta1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"projectcontour.io/retry-on":         "5xx",
+						"contour.heptio.com/per-try-timeout": "0s",
+					},
+				},
+			},
+			want: &RetryPolicy{
+				RetryOn:       "5xx",
+				NumRetries:    0,
+				PerTryTimeout: 0 * time.Second,
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := ingressRetryPolicy(tc.i)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
 
 func TestRetryPolicyIngressRoute(t *testing.T) {
 	tests := map[string]struct {
-		rp   *v1beta1.RetryPolicy
+		rp   *projcontour.RetryPolicy
 		want *RetryPolicy
 	}{
 		"nil retry policy": {
@@ -31,14 +181,14 @@ func TestRetryPolicyIngressRoute(t *testing.T) {
 			want: nil,
 		},
 		"empty policy": {
-			rp: &v1beta1.RetryPolicy{},
+			rp: &projcontour.RetryPolicy{},
 			want: &RetryPolicy{
 				RetryOn:    "5xx",
 				NumRetries: 1,
 			},
 		},
 		"explicitly zero retries": {
-			rp: &v1beta1.RetryPolicy{
+			rp: &projcontour.RetryPolicy{
 				NumRetries: 0, // zero value for NumRetries
 			},
 			want: &RetryPolicy{
@@ -47,7 +197,7 @@ func TestRetryPolicyIngressRoute(t *testing.T) {
 			},
 		},
 		"no retry count, per try timeout": {
-			rp: &v1beta1.RetryPolicy{
+			rp: &projcontour.RetryPolicy{
 				PerTryTimeout: "10s",
 			},
 			want: &RetryPolicy{
@@ -57,7 +207,7 @@ func TestRetryPolicyIngressRoute(t *testing.T) {
 			},
 		},
 		"explicit 0s timeout": {
-			rp: &v1beta1.RetryPolicy{
+			rp: &projcontour.RetryPolicy{
 				PerTryTimeout: "0s",
 			},
 			want: &RetryPolicy{
@@ -71,16 +221,14 @@ func TestRetryPolicyIngressRoute(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			got := retryPolicy(tc.rp)
-			if diff := cmp.Diff(tc.want, got); diff != "" {
-				t.Fatal(diff)
-			}
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }
 
 func TestTimeoutPolicyIngressRoute(t *testing.T) {
 	tests := map[string]struct {
-		tp   *v1beta1.TimeoutPolicy
+		tp   *ingressroutev1.TimeoutPolicy
 		want *TimeoutPolicy
 	}{
 		"nil timeout policy": {
@@ -88,21 +236,21 @@ func TestTimeoutPolicyIngressRoute(t *testing.T) {
 			want: nil,
 		},
 		"empty timeout policy": {
-			tp: &v1beta1.TimeoutPolicy{},
+			tp: &ingressroutev1.TimeoutPolicy{},
 			want: &TimeoutPolicy{
-				Timeout: 0 * time.Second,
+				ResponseTimeout: 0 * time.Second,
 			},
 		},
 		"valid request timeout": {
-			tp: &v1beta1.TimeoutPolicy{
+			tp: &ingressroutev1.TimeoutPolicy{
 				Request: "1m30s",
 			},
 			want: &TimeoutPolicy{
-				Timeout: 90 * time.Second,
+				ResponseTimeout: 90 * time.Second,
 			},
 		},
 		"invalid request timeout": {
-			tp: &v1beta1.TimeoutPolicy{
+			tp: &ingressroutev1.TimeoutPolicy{
 				Request: "90", // 90 what?
 			},
 			want: &TimeoutPolicy{
@@ -110,15 +258,76 @@ func TestTimeoutPolicyIngressRoute(t *testing.T) {
 				// be undefined. In practice we take the spec from the
 				// contour.heptio.com/request-timeout annotation, which is defined
 				// to choose infinite when its valid cannot be parsed.
-				Timeout: -1,
+				ResponseTimeout: -1,
 			},
 		},
 		"infinite request timeout": {
-			tp: &v1beta1.TimeoutPolicy{
+			tp: &ingressroutev1.TimeoutPolicy{
 				Request: "infinite",
 			},
 			want: &TimeoutPolicy{
-				Timeout: -1,
+				ResponseTimeout: -1,
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := ingressrouteTimeoutPolicy(tc.tp)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestTimeoutPolicy(t *testing.T) {
+	tests := map[string]struct {
+		tp   *projcontour.TimeoutPolicy
+		want *TimeoutPolicy
+	}{
+		"nil timeout policy": {
+			tp:   nil,
+			want: nil,
+		},
+		"empty timeout policy": {
+			tp: &projcontour.TimeoutPolicy{},
+			want: &TimeoutPolicy{
+				ResponseTimeout: 0 * time.Second,
+			},
+		},
+		"valid response timeout": {
+			tp: &projcontour.TimeoutPolicy{
+				Response: "1m30s",
+			},
+			want: &TimeoutPolicy{
+				ResponseTimeout: 90 * time.Second,
+			},
+		},
+		"invalid response timeout": {
+			tp: &projcontour.TimeoutPolicy{
+				Response: "90", // 90 what?
+			},
+			want: &TimeoutPolicy{
+				// the documentation for an invalid timeout says the duration will
+				// be undefined. In practice we take the spec from the
+				// contour.heptio.com/request-timeout annotation, which is defined
+				// to choose infinite when its valid cannot be parsed.
+				ResponseTimeout: -1,
+			},
+		},
+		"infinite response timeout": {
+			tp: &projcontour.TimeoutPolicy{
+				Response: "infinite",
+			},
+			want: &TimeoutPolicy{
+				ResponseTimeout: -1,
+			},
+		},
+		"idle timeout": {
+			tp: &projcontour.TimeoutPolicy{
+				Idle: "900s",
+			},
+			want: &TimeoutPolicy{
+				IdleTimeout: 900 * time.Second,
 			},
 		},
 	}
@@ -126,9 +335,54 @@ func TestTimeoutPolicyIngressRoute(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			got := timeoutPolicy(tc.tp)
-			if diff := cmp.Diff(tc.want, got); diff != "" {
-				t.Fatal(diff)
-			}
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestLoadBalancerPolicy(t *testing.T) {
+	tests := map[string]struct {
+		lbp  *projcontour.LoadBalancerPolicy
+		want string
+	}{
+		"nil": {
+			lbp:  nil,
+			want: "",
+		},
+		"empty": {
+			lbp:  &projcontour.LoadBalancerPolicy{},
+			want: "",
+		},
+		"WeightedLeastRequest": {
+			lbp: &projcontour.LoadBalancerPolicy{
+				Strategy: "WeightedLeastRequest",
+			},
+			want: "WeightedLeastRequest",
+		},
+		"Random": {
+			lbp: &projcontour.LoadBalancerPolicy{
+				Strategy: "Random",
+			},
+			want: "Random",
+		},
+		"Cookie": {
+			lbp: &projcontour.LoadBalancerPolicy{
+				Strategy: "Cookie",
+			},
+			want: "Cookie",
+		},
+		"unknown": {
+			lbp: &projcontour.LoadBalancerPolicy{
+				Strategy: "please",
+			},
+			want: "",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := loadBalancerPolicy(tc.lbp)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }
@@ -159,9 +413,7 @@ func TestParseTimeout(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			got := parseTimeout(tc.duration)
-			if diff := cmp.Diff(tc.want, got); diff != "" {
-				t.Fatal(diff)
-			}
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }

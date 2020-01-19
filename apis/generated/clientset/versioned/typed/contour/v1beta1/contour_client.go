@@ -1,5 +1,5 @@
 /*
-Copyright 2019 Heptio
+Copyright 2019 VMware
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,9 +19,8 @@ limitations under the License.
 package v1beta1
 
 import (
-	v1beta1 "github.com/heptio/contour/apis/contour/v1beta1"
-	"github.com/heptio/contour/apis/generated/clientset/versioned/scheme"
-	serializer "k8s.io/apimachinery/pkg/runtime/serializer"
+	v1beta1 "github.com/projectcontour/contour/apis/contour/v1beta1"
+	"github.com/projectcontour/contour/apis/generated/clientset/versioned/scheme"
 	rest "k8s.io/client-go/rest"
 )
 
@@ -76,7 +75,7 @@ func setConfigDefaults(config *rest.Config) error {
 	gv := v1beta1.SchemeGroupVersion
 	config.GroupVersion = &gv
 	config.APIPath = "/apis"
-	config.NegotiatedSerializer = serializer.DirectCodecFactory{CodecFactory: scheme.Codecs}
+	config.NegotiatedSerializer = scheme.Codecs.WithoutConversion()
 
 	if config.UserAgent == "" {
 		config.UserAgent = rest.DefaultKubernetesUserAgent()

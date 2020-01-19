@@ -1,5 +1,6 @@
-#! /bin/sh
+#! /usr/bin/env bash
 
-ls ds-grpc-v2/*.yaml | xargs cat common/gen-warning.yaml > render/daemonset-rbac.yaml
-
-ls deployment-grpc-v2/*.yaml | xargs cat common/gen-warning.yaml > render/deployment-rbac.yaml
+ls contour/*.yaml | \
+  xargs cat render/gen-warning.yaml | \
+  sed 's/imagePullPolicy: Always/imagePullPolicy: IfNotPresent/g' \
+  > render/contour.yaml

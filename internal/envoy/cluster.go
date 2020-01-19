@@ -1,4 +1,4 @@
-// Copyright © 2018 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -23,41 +23,78 @@ import (
 
 	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	envoy_cluster "github.com/envoyproxy/go-control-plane/envoy/api/v2/cluster"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
+	envoy_api_v2_core "github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type"
-	"github.com/gogo/protobuf/types"
-	"github.com/heptio/contour/internal/dag"
+	"github.com/golang/protobuf/ptypes/wrappers"
+	"github.com/projectcontour/contour/internal/dag"
+	"github.com/projectcontour/contour/internal/protobuf"
 )
 
 // CACertificateKey stores the key for the TLS validation secret cert
 const CACertificateKey = "ca.crt"
 
+func clusterDefaults() *v2.Cluster {
+	return &v2.Cluster{
+		ConnectTimeout: protobuf.Duration(250 * time.Millisecond),
+		CommonLbConfig: ClusterCommonLBConfig(),
+		LbPolicy:       lbPolicy(""),
+	}
+}
+
 // Cluster creates new v2.Cluster from dag.Cluster.
 func Cluster(c *dag.Cluster) *v2.Cluster {
-	switch upstream := c.Upstream.(type) {
-	case *dag.HTTPService:
-		cl := cluster(c, &upstream.TCPService)
-		switch upstream.Protocol {
-		case "tls":
-			cl.TlsContext = UpstreamTLSContext(
-				upstreamValidationCACert(c),
-				upstreamValidationSubjectAltName(c),
-			)
-		case "h2":
-			cl.TlsContext = UpstreamTLSContext(
-				upstreamValidationCACert(c),
-				upstreamValidationSubjectAltName(c),
-				"h2")
-			fallthrough
-		case "h2c":
-			cl.Http2ProtocolOptions = &core.Http2ProtocolOptions{}
-		}
-		return cl
-	case *dag.TCPService:
-		return cluster(c, upstream)
+	service := c.Upstream
+	cluster := clusterDefaults()
+
+	cluster.Name = Clustername(c)
+	cluster.AltStatName = altStatName(service)
+	cluster.LbPolicy = lbPolicy(c.LoadBalancerPolicy)
+	cluster.HealthChecks = edshealthcheck(c)
+
+	switch len(service.ExternalName) {
+	case 0:
+		// external name not set, cluster will be discovered via EDS
+		cluster.ClusterDiscoveryType = ClusterDiscoveryType(v2.Cluster_EDS)
+		cluster.EdsClusterConfig = edsconfig("contour", service)
 	default:
-		panic(fmt.Sprintf("unsupported upstream type: %T", upstream))
+		// external name set, use hard coded DNS name
+		cluster.ClusterDiscoveryType = ClusterDiscoveryType(v2.Cluster_STRICT_DNS)
+		cluster.LoadAssignment = StaticClusterLoadAssignment(service)
 	}
+
+	// Drain connections immediately if using healthchecks and the endpoint is known to be removed
+	if c.HealthCheckPolicy != nil {
+		cluster.DrainConnectionsOnHostRemoval = true
+	}
+
+	if anyPositive(service.MaxConnections, service.MaxPendingRequests, service.MaxRequests, service.MaxRetries) {
+		cluster.CircuitBreakers = &envoy_cluster.CircuitBreakers{
+			Thresholds: []*envoy_cluster.CircuitBreakers_Thresholds{{
+				MaxConnections:     u32nil(service.MaxConnections),
+				MaxPendingRequests: u32nil(service.MaxPendingRequests),
+				MaxRequests:        u32nil(service.MaxRequests),
+				MaxRetries:         u32nil(service.MaxRetries),
+			}},
+		}
+	}
+
+	switch c.Upstream.Protocol {
+	case "tls":
+		cluster.TlsContext = UpstreamTLSContext(
+			upstreamValidationCACert(c),
+			upstreamValidationSubjectAltName(c),
+		)
+	case "h2":
+		cluster.TlsContext = UpstreamTLSContext(
+			upstreamValidationCACert(c),
+			upstreamValidationSubjectAltName(c),
+			"h2")
+		fallthrough
+	case "h2c":
+		cluster.Http2ProtocolOptions = &envoy_api_v2_core.Http2ProtocolOptions{}
+	}
+
+	return cluster
 }
 
 func upstreamValidationCACert(c *dag.Cluster) []byte {
@@ -76,47 +113,8 @@ func upstreamValidationSubjectAltName(c *dag.Cluster) string {
 	return c.UpstreamValidation.SubjectName
 }
 
-func cluster(cluster *dag.Cluster, service *dag.TCPService) *v2.Cluster {
-	c := &v2.Cluster{
-		Name:           Clustername(cluster),
-		AltStatName:    altStatName(service),
-		ConnectTimeout: 250 * time.Millisecond,
-		LbPolicy:       lbPolicy(cluster.LoadBalancerStrategy),
-		CommonLbConfig: ClusterCommonLBConfig(),
-		HealthChecks:   edshealthcheck(cluster),
-	}
-
-	switch len(service.ExternalName) {
-	case 0:
-		// external name not set, cluster will be discovered via EDS
-		c.ClusterDiscoveryType = ClusterDiscoveryType(v2.Cluster_EDS)
-		c.EdsClusterConfig = edsconfig("contour", service)
-	default:
-		// external name set, use hard coded DNS name
-		c.ClusterDiscoveryType = ClusterDiscoveryType(v2.Cluster_STRICT_DNS)
-		c.LoadAssignment = StaticClusterLoadAssignment(service)
-	}
-
-	// Drain connections immediately if using healthchecks and the endpoint is known to be removed
-	if cluster.HealthCheck != nil {
-		c.DrainConnectionsOnHostRemoval = true
-	}
-
-	if anyPositive(service.MaxConnections, service.MaxPendingRequests, service.MaxRequests, service.MaxRetries) {
-		c.CircuitBreakers = &envoy_cluster.CircuitBreakers{
-			Thresholds: []*envoy_cluster.CircuitBreakers_Thresholds{{
-				MaxConnections:     u32nil(service.MaxConnections),
-				MaxPendingRequests: u32nil(service.MaxPendingRequests),
-				MaxRequests:        u32nil(service.MaxRequests),
-				MaxRetries:         u32nil(service.MaxRetries),
-			}},
-		}
-	}
-	return c
-}
-
 // StaticClusterLoadAssignment creates a *v2.ClusterLoadAssignment pointing to the external DNS address of the service
-func StaticClusterLoadAssignment(service *dag.TCPService) *v2.ClusterLoadAssignment {
+func StaticClusterLoadAssignment(service *dag.Service) *v2.ClusterLoadAssignment {
 	name := []string{
 		service.Namespace,
 		service.Name,
@@ -130,7 +128,7 @@ func StaticClusterLoadAssignment(service *dag.TCPService) *v2.ClusterLoadAssignm
 	}
 }
 
-func edsconfig(cluster string, service *dag.TCPService) *v2.Cluster_EdsClusterConfig {
+func edsconfig(cluster string, service *dag.Service) *v2.Cluster_EdsClusterConfig {
 	name := []string{
 		service.Namespace,
 		service.Name,
@@ -158,39 +156,31 @@ func lbPolicy(strategy string) v2.Cluster_LbPolicy {
 	}
 }
 
-func edshealthcheck(c *dag.Cluster) []*core.HealthCheck {
-	if c.HealthCheck == nil {
+func edshealthcheck(c *dag.Cluster) []*envoy_api_v2_core.HealthCheck {
+	if c.HealthCheckPolicy == nil {
 		return nil
 	}
-	return []*core.HealthCheck{
+	return []*envoy_api_v2_core.HealthCheck{
 		healthCheck(c),
 	}
 }
 
 // Clustername returns the name of the CDS cluster for this service.
 func Clustername(cluster *dag.Cluster) string {
-	var service *dag.TCPService
-	switch s := cluster.Upstream.(type) {
-	case *dag.HTTPService:
-		service = &s.TCPService
-	case *dag.TCPService:
-		service = s
-	default:
-		panic(fmt.Sprintf("unsupported upstream type: %T", s))
-	}
-	buf := cluster.LoadBalancerStrategy
-	if hc := cluster.HealthCheck; hc != nil {
-		if hc.TimeoutSeconds > 0 {
-			buf += (time.Duration(hc.TimeoutSeconds) * time.Second).String()
+	service := cluster.Upstream
+	buf := cluster.LoadBalancerPolicy
+	if hc := cluster.HealthCheckPolicy; hc != nil {
+		if hc.Timeout > 0 {
+			buf += hc.Timeout.String()
 		}
-		if hc.IntervalSeconds > 0 {
-			buf += (time.Duration(hc.IntervalSeconds) * time.Second).String()
+		if hc.Interval > 0 {
+			buf += hc.Interval.String()
 		}
-		if hc.UnhealthyThresholdCount > 0 {
-			buf += strconv.Itoa(int(hc.UnhealthyThresholdCount))
+		if hc.UnhealthyThreshold > 0 {
+			buf += strconv.Itoa(int(hc.UnhealthyThreshold))
 		}
-		if hc.HealthyThresholdCount > 0 {
-			buf += strconv.Itoa(int(hc.HealthyThresholdCount))
+		if hc.HealthyThreshold > 0 {
+			buf += strconv.Itoa(int(hc.HealthyThreshold))
 		}
 		buf += hc.Path
 	}
@@ -207,7 +197,7 @@ func Clustername(cluster *dag.Cluster) string {
 
 // altStatName generates an alternative stat name for the service
 // using format ns_name_port
-func altStatName(service *dag.TCPService) string {
+func altStatName(service *dag.Service) string {
 	return strings.Join([]string{service.Namespace, service.Name, strconv.Itoa(int(service.Port))}, "_")
 }
 
@@ -260,7 +250,7 @@ func min(a, b int) int {
 }
 
 // anyPositive indicates if any of the values provided are greater than zero.
-func anyPositive(first int, rest ...int) bool {
+func anyPositive(first uint32, rest ...uint32) bool {
 	if first > 0 {
 		return true
 	}
@@ -273,13 +263,13 @@ func anyPositive(first int, rest ...int) bool {
 }
 
 // u32nil creates a *types.UInt32Value containing v.
-// u32nil returns nil if v is zero.
-func u32nil(val int) *types.UInt32Value {
+// u33nil returns nil if v is zero.
+func u32nil(val uint32) *wrappers.UInt32Value {
 	switch val {
 	case 0:
 		return nil
 	default:
-		return u32(val)
+		return protobuf.UInt32(val)
 	}
 }
 
@@ -292,15 +282,15 @@ func ClusterCommonLBConfig() *v2.Cluster_CommonLbConfig {
 	}
 }
 
-// ConfigSource returns a *core.ConfigSource for cluster.
-func ConfigSource(cluster string) *core.ConfigSource {
-	return &core.ConfigSource{
-		ConfigSourceSpecifier: &core.ConfigSource_ApiConfigSource{
-			ApiConfigSource: &core.ApiConfigSource{
-				ApiType: core.ApiConfigSource_GRPC,
-				GrpcServices: []*core.GrpcService{{
-					TargetSpecifier: &core.GrpcService_EnvoyGrpc_{
-						EnvoyGrpc: &core.GrpcService_EnvoyGrpc{
+// ConfigSource returns a *envoy_api_v2_core.ConfigSource for cluster.
+func ConfigSource(cluster string) *envoy_api_v2_core.ConfigSource {
+	return &envoy_api_v2_core.ConfigSource{
+		ConfigSourceSpecifier: &envoy_api_v2_core.ConfigSource_ApiConfigSource{
+			ApiConfigSource: &envoy_api_v2_core.ApiConfigSource{
+				ApiType: envoy_api_v2_core.ApiConfigSource_GRPC,
+				GrpcServices: []*envoy_api_v2_core.GrpcService{{
+					TargetSpecifier: &envoy_api_v2_core.GrpcService_EnvoyGrpc_{
+						EnvoyGrpc: &envoy_api_v2_core.GrpcService_EnvoyGrpc{
 							ClusterName: cluster,
 						},
 					},

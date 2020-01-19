@@ -1,5 +1,5 @@
 /*
-Copyright 2019 Heptio
+Copyright 2019 VMware
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ limitations under the License.
 package fake
 
 import (
-	v1beta1 "github.com/heptio/contour/apis/generated/clientset/versioned/typed/contour/v1beta1"
+	v1beta1 "github.com/projectcontour/contour/apis/generated/clientset/versioned/typed/contour/v1beta1"
 	rest "k8s.io/client-go/rest"
 	testing "k8s.io/client-go/testing"
 )

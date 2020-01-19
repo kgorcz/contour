@@ -1,4 +1,4 @@
-// Copyright © 2018 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,8 +17,9 @@ import (
 	"fmt"
 	"testing"
 
-	ingressroutev1beta1 "github.com/heptio/contour/apis/contour/v1beta1"
-	"github.com/heptio/contour/apis/generated/clientset/versioned/fake"
+	ingressroutev1beta1 "github.com/projectcontour/contour/apis/contour/v1beta1"
+	"github.com/projectcontour/contour/apis/generated/clientset/versioned/fake"
+	projcontour "github.com/projectcontour/contour/apis/projectcontour/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
@@ -40,7 +41,7 @@ func TestSetStatus(t *testing.T) {
 					Name:      "test",
 					Namespace: "default",
 				},
-				Status: ingressroutev1beta1.Status{
+				Status: projcontour.Status{
 					CurrentStatus: "",
 					Description:   "",
 				},
@@ -56,7 +57,7 @@ func TestSetStatus(t *testing.T) {
 					Name:      "test",
 					Namespace: "default",
 				},
-				Status: ingressroutev1beta1.Status{
+				Status: projcontour.Status{
 					CurrentStatus: "valid",
 					Description:   "this is a valid IR",
 				},
@@ -72,7 +73,7 @@ func TestSetStatus(t *testing.T) {
 					Name:      "test",
 					Namespace: "default",
 				},
-				Status: ingressroutev1beta1.Status{
+				Status: projcontour.Status{
 					CurrentStatus: "invalid",
 					Description:   "boo hiss",
 				},
@@ -95,7 +96,7 @@ func TestSetStatus(t *testing.T) {
 					return true, tc.existing, nil
 				}
 			})
-			irs := IngressRouteStatus{
+			irs := CRDStatus{
 				Client: client,
 			}
 			if err := irs.SetStatus(tc.msg, tc.desc, tc.existing); err != nil {

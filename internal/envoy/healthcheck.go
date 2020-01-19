@@ -1,4 +1,4 @@
-// Copyright © 2018 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,9 +16,11 @@ package envoy
 import (
 	"time"
 
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
-	"github.com/gogo/protobuf/types"
-	"github.com/heptio/contour/internal/dag"
+	envoy_api_v2_core "github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
+	"github.com/golang/protobuf/ptypes/duration"
+	"github.com/golang/protobuf/ptypes/wrappers"
+	"github.com/projectcontour/contour/internal/dag"
+	"github.com/projectcontour/contour/internal/protobuf"
 )
 
 const (
@@ -30,9 +32,9 @@ const (
 	hcHost               = "contour-envoy-healthcheck"
 )
 
-// healthCheck returns a *core.HealthCheck value.
-func healthCheck(cluster *dag.Cluster) *core.HealthCheck {
-	hc := cluster.HealthCheck
+// healthCheck returns a *envoy_api_v2_core.HealthCheck value.
+func healthCheck(cluster *dag.Cluster) *envoy_api_v2_core.HealthCheck {
+	hc := cluster.HealthCheckPolicy
 	host := hcHost
 	if hc.Host != "" {
 		host = hc.Host
@@ -40,13 +42,13 @@ func healthCheck(cluster *dag.Cluster) *core.HealthCheck {
 
 	// TODO(dfc) why do we need to specify our own default, what is the default
 	// that envoy applies if these fields are left nil?
-	return &core.HealthCheck{
-		Timeout:            secondsOrDefault(hc.TimeoutSeconds, hcTimeout),
-		Interval:           secondsOrDefault(hc.IntervalSeconds, hcInterval),
-		UnhealthyThreshold: countOrDefault(hc.UnhealthyThresholdCount, hcUnhealthyThreshold),
-		HealthyThreshold:   countOrDefault(hc.HealthyThresholdCount, hcHealthyThreshold),
-		HealthChecker: &core.HealthCheck_HttpHealthCheck_{
-			HttpHealthCheck: &core.HealthCheck_HttpHealthCheck{
+	return &envoy_api_v2_core.HealthCheck{
+		Timeout:            durationOrDefault(hc.Timeout, hcTimeout),
+		Interval:           durationOrDefault(hc.Interval, hcInterval),
+		UnhealthyThreshold: countOrDefault(hc.UnhealthyThreshold, hcUnhealthyThreshold),
+		HealthyThreshold:   countOrDefault(hc.HealthyThreshold, hcHealthyThreshold),
+		HealthChecker: &envoy_api_v2_core.HealthCheck_HttpHealthCheck_{
+			HttpHealthCheck: &envoy_api_v2_core.HealthCheck_HttpHealthCheck{
 				Path: hc.Path,
 				Host: host,
 			},
@@ -54,19 +56,18 @@ func healthCheck(cluster *dag.Cluster) *core.HealthCheck {
 	}
 }
 
-func secondsOrDefault(seconds int64, def time.Duration) *time.Duration {
-	if seconds != 0 {
-		t := time.Duration(seconds) * time.Second
-		return &t
+func durationOrDefault(d, def time.Duration) *duration.Duration {
+	if d != 0 {
+		return protobuf.Duration(d)
 	}
-	return &def
+	return protobuf.Duration(def)
 }
 
-func countOrDefault(count uint32, def int) *types.UInt32Value {
+func countOrDefault(count uint32, def uint32) *wrappers.UInt32Value {
 	switch count {
 	case 0:
-		return u32(def)
+		return protobuf.UInt32(def)
 	default:
-		return u32(int(count))
+		return protobuf.UInt32(count)
 	}
 }

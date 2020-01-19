@@ -43,10 +43,10 @@ In order to facilitate debugging and to find out exactly the data that is being 
 will add support to contour cli sub command. This cmd shd be used stream changes to the SDS api endpoint
 to the terminal.
 
-`kubectl -n heptio-contour exec $CONTOUR_POD -c contour contour cli sds`
+`kubectl -n projectcontour exec $CONTOUR_POD -c contour contour cli sds`
 
 
-[0]: https://github.com/heptio/contour/issues/898
+[0]: https://github.com/projectcontour/contour/issues/898
 [1]: https://www.envoyproxy.io/docs/envoy/v1.9.0/configuration/secret
 [2]: https://www.envoyproxy.io/docs/envoy/v1.9.0/api-v2/api/v2/auth/cert.proto#auth-sdssecretconfig
 

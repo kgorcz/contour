@@ -1,4 +1,4 @@
-// Copyright © 2017 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -23,15 +23,15 @@ import (
 	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v2"
 	"github.com/envoyproxy/go-control-plane/pkg/cache"
-	"github.com/heptio/contour/internal/contour"
-	"github.com/heptio/contour/internal/metrics"
+	"github.com/projectcontour/contour/internal/contour"
+	"github.com/projectcontour/contour/internal/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/api/extensions/v1beta1"
+	"k8s.io/api/networking/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
@@ -199,13 +199,14 @@ func TestGRPC(t *testing.T) {
 				Metrics:      ch.Metrics,
 				FieldLogger:  log,
 			}
+			r := prometheus.NewRegistry()
 			srv := NewAPI(log, map[string]Resource{
 				ch.ClusterCache.TypeURL():  &ch.ClusterCache,
 				ch.RouteCache.TypeURL():    &ch.RouteCache,
 				ch.ListenerCache.TypeURL(): &ch.ListenerCache,
 				ch.SecretCache.TypeURL():   &ch.SecretCache,
 				et.TypeURL():               et,
-			})
+			}, r)
 			l, err := net.Listen("tcp", "127.0.0.1:0")
 			check(t, err)
 			done := make(chan error, 1)

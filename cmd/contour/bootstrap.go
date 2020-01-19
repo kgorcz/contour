@@ -1,4 +1,4 @@
-// Copyright © 2018 Heptio
+// Copyright © 2019 VMware
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,10 +14,11 @@
 package main
 
 import (
+	"io"
 	"os"
 
-	"github.com/gogo/protobuf/jsonpb"
-	"github.com/heptio/contour/internal/envoy"
+	"github.com/golang/protobuf/jsonpb"
+	"github.com/projectcontour/contour/internal/envoy"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
 
@@ -27,7 +28,7 @@ func registerBootstrap(app *kingpin.Application) (*kingpin.CmdClause, *bootstrap
 	var ctx bootstrapContext
 
 	bootstrap := app.Command("bootstrap", "Generate bootstrap configuration.")
-	bootstrap.Arg("path", "Configuration file.").Required().StringVar(&ctx.path)
+	bootstrap.Arg("path", "Configuration file ('-' for standard output)").Required().StringVar(&ctx.path)
 	bootstrap.Flag("admin-address", "Envoy admin interface address").StringVar(&ctx.config.AdminAddress)
 	bootstrap.Flag("admin-port", "Envoy admin interface port").IntVar(&ctx.config.AdminPort)
 	bootstrap.Flag("xds-address", "xDS gRPC API address").StringVar(&ctx.config.XDSAddress)
@@ -35,7 +36,7 @@ func registerBootstrap(app *kingpin.Application) (*kingpin.CmdClause, *bootstrap
 	bootstrap.Flag("envoy-cafile", "gRPC CA Filename for Envoy to load").Envar("ENVOY_CAFILE").StringVar(&ctx.config.GrpcCABundle)
 	bootstrap.Flag("envoy-cert-file", "gRPC Client cert filename for Envoy to load").Envar("ENVOY_CERT_FILE").StringVar(&ctx.config.GrpcClientCert)
 	bootstrap.Flag("envoy-key-file", "gRPC Client key filename for Envoy to load").Envar("ENVOY_KEY_FILE").StringVar(&ctx.config.GrpcClientKey)
-	bootstrap.Flag("namespace", "The namespace the Envoy container will run in").Envar("CONTOUR_NAMESPACE").Default("heptio-contour").StringVar(&ctx.config.Namespace)
+	bootstrap.Flag("namespace", "The namespace the Envoy container will run in").Envar("CONTOUR_NAMESPACE").Default("projectcontour").StringVar(&ctx.config.Namespace)
 	return bootstrap, &ctx
 }
 
@@ -46,11 +47,23 @@ type bootstrapContext struct {
 
 // doBootstrap writes an Envoy bootstrap configuration file to the supplied path.
 func doBootstrap(ctx *bootstrapContext) {
-	f, err := os.Create(ctx.path)
-	check(err)
-	bs := envoy.Bootstrap(&ctx.config)
+	var out io.Writer
+
+	switch ctx.path {
+	case "-":
+		out = os.Stdout
+	default:
+		f, err := os.Create(ctx.path)
+		check(err)
+
+		out = f
+
+		defer func() {
+			check(f.Close())
+		}()
+	}
+
 	m := &jsonpb.Marshaler{OrigName: true}
-	err = m.Marshal(f, bs)
-	check(err)
-	check(f.Close())
+
+	check(m.Marshal(out, envoy.Bootstrap(&ctx.config)))
 }
