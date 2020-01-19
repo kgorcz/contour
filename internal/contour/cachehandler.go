@@ -39,28 +39,34 @@ type CacheHandler struct {
 	*metrics.Metrics
 }
 
-type statusable interface {
-	Statuses() map[dag.Meta]dag.Status
-}
-
-func (ch *CacheHandler) OnChange(kc *dag.KubernetesCache) {
+func (ch *CacheHandler) OnChange(dag *dag.DAG) {
 	timer := prometheus.NewTimer(ch.CacheHandlerOnUpdateSummary)
 	defer timer.ObserveDuration()
-	dag := dag.BuildDAG(kc)
-	ch.setIngressRouteStatus(dag)
+
 	ch.updateSecrets(dag)
 	ch.updateListeners(dag)
 	ch.updateRoutes(dag)
 	ch.updateClusters(dag)
-	ch.updateIngressRouteMetric(dag)
+
+	statuses := dag.Statuses()
+	ch.setIngressRouteStatus(statuses)
+
+	metrics := calculateIngressRouteMetric(statuses)
+	ch.Metrics.SetIngressRouteMetric(metrics)
+
 	ch.SetDAGLastRebuilt(time.Now())
 }
 
-func (ch *CacheHandler) setIngressRouteStatus(st statusable) {
-	for _, s := range st.Statuses() {
-		err := ch.IngressRouteStatus.SetStatus(s.Status, s.Description, s.Object)
+func (ch *CacheHandler) setIngressRouteStatus(statuses map[dag.Meta]dag.Status) {
+	for _, st := range statuses {
+		err := ch.IngressRouteStatus.SetStatus(st.Status, st.Description, st.Object)
 		if err != nil {
-			ch.Errorf("Error Setting Status of IngressRoute: %v", err)
+			ch.WithError(err).
+				WithField("status", st.Status).
+				WithField("desc", st.Description).
+				WithField("name", st.Object.Name).
+				WithField("namespace", st.Object.Namespace).
+				Error("failed to set status")
 		}
 	}
 }
@@ -83,41 +89,4 @@ func (ch *CacheHandler) updateRoutes(root dag.Visitable) {
 func (ch *CacheHandler) updateClusters(root dag.Visitable) {
 	clusters := visitClusters(root)
 	ch.ClusterCache.Update(clusters)
-}
-
-func (ch *CacheHandler) updateIngressRouteMetric(st statusable) {
-	metrics := calculateIngressRouteMetric(st)
-	ch.Metrics.SetIngressRouteMetric(metrics)
-}
-
-func calculateIngressRouteMetric(st statusable) metrics.IngressRouteMetric {
-	metricTotal := make(map[metrics.Meta]int)
-	metricValid := make(map[metrics.Meta]int)
-	metricInvalid := make(map[metrics.Meta]int)
-	metricOrphaned := make(map[metrics.Meta]int)
-	metricRoots := make(map[metrics.Meta]int)
-
-	for _, v := range st.Statuses() {
-		switch v.Status {
-		case dag.StatusValid:
-			metricValid[metrics.Meta{VHost: v.Vhost, Namespace: v.Object.GetNamespace()}]++
-		case dag.StatusInvalid:
-			metricInvalid[metrics.Meta{VHost: v.Vhost, Namespace: v.Object.GetNamespace()}]++
-		case dag.StatusOrphaned:
-			metricOrphaned[metrics.Meta{Namespace: v.Object.GetNamespace()}]++
-		}
-		metricTotal[metrics.Meta{Namespace: v.Object.GetNamespace()}]++
-
-		if v.Object.Spec.VirtualHost != nil {
-			metricRoots[metrics.Meta{Namespace: v.Object.GetNamespace()}]++
-		}
-	}
-
-	return metrics.IngressRouteMetric{
-		Invalid:  metricInvalid,
-		Valid:    metricValid,
-		Orphaned: metricOrphaned,
-		Total:    metricTotal,
-		Root:     metricRoots,
-	}
 }

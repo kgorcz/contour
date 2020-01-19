@@ -1,8 +1,8 @@
 PROJECT = contour
+MODULE = github.com/heptio/$(PROJECT)
 REGISTRY ?= gcr.io/heptio-images
 IMAGE := $(REGISTRY)/$(PROJECT)
 SRCDIRS := ./cmd ./internal ./apis
-PKGS := $(shell GO111MODULE=on go list -mod=readonly ./cmd/... ./internal/...)
 LOCAL_BOOTSTRAP_CONFIG = localenvoyconfig.yaml
 SECURE_LOCAL_BOOTSTRAP_CONFIG = securelocalenvoyconfig.yaml
 PHONY = gencerts
@@ -19,20 +19,23 @@ VERSION ?= $(GIT_REF)
 export GO111MODULE=on
 
 test: install
-	go test -mod=readonly ./...
+	go test -mod=readonly $(MODULE)/...
 
 test-race: | test
-	go test -race -mod=readonly ./...
+	go test -race -mod=readonly $(MODULE)/...
 
 vet: | test
-	go vet ./...
+	go vet $(MODULE)/...
 
 check: test test-race vet gofmt staticcheck misspell unconvert unparam ineffassign
 	@echo Checking rendered files are up to date
 	@(cd examples && bash render.sh && git diff --exit-code . || (echo "rendered files are out of date" && exit 1))
 
 install:
-	go install -mod=readonly -v -tags "oidc gcp" ./...
+	go install -mod=readonly -v -tags "oidc gcp" $(MODULE)/cmd/contour
+
+race:
+	go install -mod=readonly -v -race -tags "oidc gcp" $(MODULE)/cmd/contour
 
 download:
 	go mod download
@@ -80,7 +83,7 @@ staticcheck:
 	go install honnef.co/go/tools/cmd/staticcheck
 	staticcheck \
 		-checks all,-ST1003 \
-		$(PKGS)
+		$(MODULE)/{cmd,internal}/...
 
 misspell:
 	go install github.com/client9/misspell/cmd/misspell
@@ -92,7 +95,7 @@ misspell:
 
 unconvert:
 	go install github.com/mdempsky/unconvert
-	unconvert -v $(PKGS)
+	unconvert -v $(MODULE)/{cmd,internal}/...
 
 ineffassign:
 	go install github.com/gordonklaus/ineffassign
@@ -102,11 +105,11 @@ pedantic: check errcheck
 
 unparam:
 	go install mvdan.cc/unparam
-	unparam -exported $(PKGS)
+	unparam -exported $(MODULE)/{cmd,internal}/...
 
 errcheck:
 	go install github.com/kisielk/errcheck
-	errcheck $(PKGS)
+	errcheck $(MODULE)/...
 
 render:
 	@echo Rendering example deployment files...

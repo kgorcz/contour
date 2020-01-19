@@ -22,13 +22,22 @@ import (
 	"github.com/sirupsen/logrus"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 	"k8s.io/client-go/kubernetes"
+	coordinationv1 "k8s.io/client-go/kubernetes/typed/coordination/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog"
 )
 
-func main() {
+func init() {
+	// even thought we don't use it directly, some of our dependencies use klog
+	// so we must initialize it here to ensure that klog is set to log to stderr
+	// and not to a file.
+	// yes, this is gross, the klog authors are monsters.
 	klog.InitFlags(nil)
+}
+
+func main() {
+
 	log := logrus.StandardLogger()
 	app := kingpin.New("contour", "Heptio Contour Kubernetes ingress controller.")
 
@@ -91,7 +100,7 @@ func main() {
 	}
 }
 
-func newClient(kubeconfig string, inCluster bool) (*kubernetes.Clientset, *clientset.Clientset) {
+func newClient(kubeconfig string, inCluster bool) (*kubernetes.Clientset, *clientset.Clientset, *coordinationv1.CoordinationV1Client) {
 	var err error
 	var config *rest.Config
 	if kubeconfig != "" && !inCluster {
@@ -106,7 +115,10 @@ func newClient(kubeconfig string, inCluster bool) (*kubernetes.Clientset, *clien
 	check(err)
 	contourClient, err := clientset.NewForConfig(config)
 	check(err)
-	return client, contourClient
+	coordinationClient, err := coordinationv1.NewForConfig(config)
+	check(err)
+
+	return client, contourClient, coordinationClient
 }
 
 func check(err error) {

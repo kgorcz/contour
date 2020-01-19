@@ -59,13 +59,8 @@ func (c *RouteCache) Update(v map[string]*v2.RouteConfiguration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.values = v
-	c.notify()
-}
-
-// notify notifies all registered waiters that an event has occurred.
-func (c *RouteCache) notify() {
 	c.last++
+	c.values = v
 
 	for _, ch := range c.waiters {
 		ch <- c.last
@@ -165,10 +160,6 @@ func (v *routeVisitor) visit(vertex dag.Vertex) {
 						}
 						vhost.Routes = append(vhost.Routes, rr)
 					case *dag.RegexRoute:
-						if len(r.Clusters) < 1 {
-							// no services for this route, skip it.
-							return
-						}
 						rr := route.Route{
 							Match:               envoy.RouteRegex(r.Regex),
 							Action:              envoy.RouteRoute(&r.Route),
@@ -202,10 +193,6 @@ func (v *routeVisitor) visit(vertex dag.Vertex) {
 							RequestHeadersToAdd: envoy.RouteHeaders(),
 						})
 					case *dag.RegexRoute:
-						if len(r.Clusters) < 1 {
-							// no services for this route, skip it.
-							return
-						}
 						vhost.Routes = append(vhost.Routes, route.Route{
 							Match:               envoy.RouteRegex(r.Regex),
 							Action:              envoy.RouteRoute(&r.Route),

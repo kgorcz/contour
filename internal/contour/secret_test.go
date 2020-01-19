@@ -10,8 +10,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
 	"github.com/heptio/contour/internal/dag"
-	"github.com/heptio/contour/internal/metrics"
-	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/api/extensions/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -113,6 +111,20 @@ func TestSecretVisit(t *testing.T) {
 		},
 		"simple ingress with secret": {
 			objs: []interface{}{
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Name:       "http",
+							Protocol:   "TCP",
+							Port:       8080,
+							TargetPort: intstr.FromInt(8080),
+						}},
+					},
+				},
 				&v1beta1.Ingress{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "simple",
@@ -137,6 +149,20 @@ func TestSecretVisit(t *testing.T) {
 		},
 		"multiple ingresses with shared secret": {
 			objs: []interface{}{
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Name:       "http",
+							Protocol:   "TCP",
+							Port:       8080,
+							TargetPort: intstr.FromInt(8080),
+						}},
+					},
+				},
 				&v1beta1.Ingress{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "simple-a",
@@ -177,6 +203,20 @@ func TestSecretVisit(t *testing.T) {
 		},
 		"multiple ingresses with different secrets": {
 			objs: []interface{}{
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Name:       "http",
+							Protocol:   "TCP",
+							Port:       80,
+							TargetPort: intstr.FromInt(8080),
+						}},
+					},
+				},
 				&v1beta1.Ingress{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "simple-a",
@@ -219,6 +259,20 @@ func TestSecretVisit(t *testing.T) {
 		},
 		"simple ingressroute with secret": {
 			objs: []interface{}{
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "backend",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Name:       "http",
+							Protocol:   "TCP",
+							Port:       80,
+							TargetPort: intstr.FromInt(8080),
+						}},
+					},
+				},
 				&ingressroutev1.IngressRoute{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "simple",
@@ -232,13 +286,11 @@ func TestSecretVisit(t *testing.T) {
 							},
 						},
 						Routes: []ingressroutev1.Route{{
-							Services: []ingressroutev1.Service{
-								{
-									Name: "backend",
-									Port: 80,
-								},
+							Services: []ingressroutev1.Service{{
+								Name: "backend",
+								Port: 80,
 							}},
-						},
+						}},
 					},
 				},
 				tlssecret("default", "secret", secretdata("cert", "key")),
@@ -249,6 +301,20 @@ func TestSecretVisit(t *testing.T) {
 		},
 		"multiple ingressroutes with shared secret": {
 			objs: []interface{}{
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "backend",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Name:       "http",
+							Protocol:   "TCP",
+							Port:       80,
+							TargetPort: intstr.FromInt(8080),
+						}},
+					},
+				},
 				&ingressroutev1.IngressRoute{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "simple-a",
@@ -261,16 +327,12 @@ func TestSecretVisit(t *testing.T) {
 								SecretName: "secret",
 							},
 						},
-						Routes: []ingressroutev1.Route{
-							{
-								Services: []ingressroutev1.Service{
-									{
-										Name: "backend",
-										Port: 80,
-									},
-								},
-							},
-						},
+						Routes: []ingressroutev1.Route{{
+							Services: []ingressroutev1.Service{{
+								Name: "backend",
+								Port: 80,
+							}},
+						}},
 					},
 				},
 				&ingressroutev1.IngressRoute{
@@ -285,16 +347,12 @@ func TestSecretVisit(t *testing.T) {
 								SecretName: "secret",
 							},
 						},
-						Routes: []ingressroutev1.Route{
-							{
-								Services: []ingressroutev1.Service{
-									{
-										Name: "backend",
-										Port: 80,
-									},
-								},
-							},
-						},
+						Routes: []ingressroutev1.Route{{
+							Services: []ingressroutev1.Service{{
+								Name: "backend",
+								Port: 80,
+							}},
+						}},
 					},
 				},
 				tlssecret("default", "secret", secretdata("cert", "key")),
@@ -305,6 +363,20 @@ func TestSecretVisit(t *testing.T) {
 		},
 		"multiple ingressroutes with different secret": {
 			objs: []interface{}{
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "backend",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Name:       "http",
+							Protocol:   "TCP",
+							Port:       80,
+							TargetPort: intstr.FromInt(8080),
+						}},
+					},
+				},
 				&ingressroutev1.IngressRoute{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "simple-a",
@@ -317,16 +389,12 @@ func TestSecretVisit(t *testing.T) {
 								SecretName: "secret-a",
 							},
 						},
-						Routes: []ingressroutev1.Route{
-							{
-								Services: []ingressroutev1.Service{
-									{
-										Name: "backend",
-										Port: 80,
-									},
-								},
-							},
-						},
+						Routes: []ingressroutev1.Route{{
+							Services: []ingressroutev1.Service{{
+								Name: "backend",
+								Port: 80,
+							}},
+						}},
 					},
 				},
 				&ingressroutev1.IngressRoute{
@@ -341,16 +409,12 @@ func TestSecretVisit(t *testing.T) {
 								SecretName: "secret-b",
 							},
 						},
-						Routes: []ingressroutev1.Route{
-							{
-								Services: []ingressroutev1.Service{
-									{
-										Name: "backend",
-										Port: 80,
-									},
-								},
-							},
-						},
+						Routes: []ingressroutev1.Route{{
+							Services: []ingressroutev1.Service{{
+								Name: "backend",
+								Port: 80,
+							}},
+						}},
 					},
 				},
 				tlssecret("default", "secret-a", secretdata("cert-a", "key-a")),
@@ -365,21 +429,22 @@ func TestSecretVisit(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			reh := ResourceEventHandler{
-				FieldLogger: testLogger(t),
-				Notifier:    new(nullNotifier),
-				Metrics:     metrics.NewMetrics(prometheus.NewRegistry()),
-			}
-			for _, o := range tc.objs {
-				reh.OnAdd(o)
-			}
-			root := dag.BuildDAG(&reh.KubernetesCache)
+			root := buildDAG(tc.objs...)
 			got := visitSecrets(root)
 			if !reflect.DeepEqual(tc.want, got) {
 				t.Fatalf("expected:\n%+v\ngot:\n%+v", tc.want, got)
 			}
 		})
 	}
+}
+
+// buildDAG produces a dag.DAG from the supplied objects.
+func buildDAG(objs ...interface{}) *dag.DAG {
+	var builder dag.Builder
+	for _, o := range objs {
+		builder.Source.Insert(o)
+	}
+	return builder.Build()
 }
 
 func secretmap(secrets ...*auth.Secret) map[string]*auth.Secret {

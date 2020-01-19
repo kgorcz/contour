@@ -22,14 +22,20 @@ spec:
     spec:
       hostNetwork: true
       containers:
-      - image: gcr.io/heptio-images/contour:v0.14.1
+      - image: gcr.io/heptio-images/contour:v0.15.0
         imagePullPolicy: Always
         ports:
         - containerPort: 8000
           name: contour
         name: contour
         command: ["contour"]
-        args: ["serve", "--incluster", "--envoy-service-http-port", "8080", "--envoy-service-https-port", "8443"]
+        args:
+        - serve
+        - --incluster
+        - --insecure
+        - --envoy-service-http-port=8080
+        - --envoy-service-https-port=8443
+        - --config-path=/config/contour.yaml
         livenessProbe:
           httpGet:
             path: /healthz
@@ -38,6 +44,10 @@ spec:
           httpGet:
             path: /healthz
             port: 8000
+        volumeMounts:
+        - name: contour-config
+          mountPath: /config
+          readOnly: true
       - image: docker.io/envoyproxy/envoy:v1.11.1
         name: envoy
         ports:
@@ -47,10 +57,21 @@ spec:
           name: https
         command: ["envoy"]
         args:
-        - --config-path /config/contour.json
-        - --service-cluster cluster0
-        - --service-node node0
+        - --config-path /config/envoy.json
+        - --service-cluster $(CONTOUR_NAMESPACE)
+        - --service-node $(ENVOY_POD_NAME)
         - --log-level info
+        env:
+        - name: CONTOUR_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: ENVOY_POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
         readinessProbe:
           httpGet:
             path: /healthz
@@ -58,20 +79,29 @@ spec:
           initialDelaySeconds: 3
           periodSeconds: 3
         volumeMounts:
-        - name: contour-config
+        - name: envoy-config
           mountPath: /config
         lifecycle:
           preStop:
             exec:
-              command: ["wget", "-qO-", "--post-data=''", "http://localhost:9001/healthcheck/fail"] 
+              command:
+              - bash
+              - -c
+              - --
+              - echo
+              - -ne
+              - "POST /healthcheck/fail HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+              - '>/dev/tcp/localhost/9001'
       initContainers:
-      - image: gcr.io/heptio-images/contour:v0.14.1
+      - image: gcr.io/heptio-images/contour:v0.15.0
         imagePullPolicy: Always
         name: envoy-initconfig
         command: ["contour"]
-        args: ["bootstrap", "/config/contour.json"]
+        args:
+        - bootstrap
+        - /config/envoy.json
         volumeMounts:
-        - name: contour-config
+        - name: envoy-config
           mountPath: /config
         env:
         - name: CONTOUR_NAMESPACE
@@ -79,8 +109,15 @@ spec:
             fieldRef:
               fieldPath: metadata.namespace
       volumes:
-      - name: contour-config
+      - name: envoy-config
         emptyDir: {}
+      - name: contour-config
+        configMap:
+          name: contour
+          defaultMode: 0644
+          items:
+          - key: contour.yaml
+            path: contour.yaml
       dnsPolicy: ClusterFirst
       serviceAccountName: contour
       terminationGracePeriodSeconds: 30

@@ -17,12 +17,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/endpoint"
+	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	"github.com/gogo/protobuf/types"
 	"github.com/heptio/contour/internal/envoy"
 	"google.golang.org/grpc"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -58,18 +57,18 @@ func TestAddRemoveEndpoints(t *testing.T) {
 	// check that it's been translated correctly.
 	assertEqual(t, &v2.DiscoveryResponse{
 		VersionInfo: "1",
-		Resources: []types.Any{
-			any(t, clusterloadassignment(
+		Resources: resources(t,
+			envoy.ClusterLoadAssignment(
 				"super-long-namespace-name-oh-boy/what-a-descriptive-service-name-you-must-be-so-proud/http",
-				envoy.LBEndpoint("172.16.0.1", 8000),
-				envoy.LBEndpoint("172.16.0.2", 8000),
-			)),
-			any(t, clusterloadassignment(
+				envoy.SocketAddress("172.16.0.1", 8000),
+				envoy.SocketAddress("172.16.0.2", 8000),
+			),
+			envoy.ClusterLoadAssignment(
 				"super-long-namespace-name-oh-boy/what-a-descriptive-service-name-you-must-be-so-proud/https",
-				envoy.LBEndpoint("172.16.0.1", 8443),
-				envoy.LBEndpoint("172.16.0.2", 8443),
-			)),
-		},
+				envoy.SocketAddress("172.16.0.1", 8443),
+				envoy.SocketAddress("172.16.0.2", 8443),
+			),
+		),
 		TypeUrl: endpointType,
 		Nonce:   "1",
 	}, streamEDS(t, cc))
@@ -140,18 +139,18 @@ func TestAddEndpointComplicated(t *testing.T) {
 
 	assertEqual(t, &v2.DiscoveryResponse{
 		VersionInfo: "1",
-		Resources: []types.Any{
-			any(t, clusterloadassignment(
+		Resources: resources(t,
+			envoy.ClusterLoadAssignment(
 				"default/kuard/admin",
-				envoy.LBEndpoint("10.48.1.77", 9000),
-				envoy.LBEndpoint("10.48.1.78", 9000),
-			)),
-			any(t, clusterloadassignment(
+				envoy.SocketAddress("10.48.1.77", 9000),
+				envoy.SocketAddress("10.48.1.78", 9000),
+			),
+			envoy.ClusterLoadAssignment(
 				"default/kuard/foo",
-				envoy.LBEndpoint("10.48.1.77", 9999), // TODO(dfc) order is not guaranteed by endpoint controller
-				envoy.LBEndpoint("10.48.1.78", 8080),
-			)),
-		},
+				envoy.SocketAddress("10.48.1.77", 9999), // TODO(dfc) order is not guaranteed by endpoint controller
+				envoy.SocketAddress("10.48.1.78", 8080),
+			),
+		),
 		TypeUrl: endpointType,
 		Nonce:   "1",
 	}, streamEDS(t, cc))
@@ -200,13 +199,13 @@ func TestEndpointFilter(t *testing.T) {
 
 	assertEqual(t, &v2.DiscoveryResponse{
 		VersionInfo: "1",
-		Resources: []types.Any{
-			any(t, clusterloadassignment(
+		Resources: resources(t,
+			envoy.ClusterLoadAssignment(
 				"default/kuard/foo",
-				envoy.LBEndpoint("10.48.1.77", 9999), // TODO(dfc) order is not guaranteed by endpoint controller
-				envoy.LBEndpoint("10.48.1.78", 8080),
-			)),
-		},
+				envoy.SocketAddress("10.48.1.77", 9999), // TODO(dfc) order is not guaranteed by endpoint controller
+				envoy.SocketAddress("10.48.1.78", 8080),
+			),
+		),
 		TypeUrl: endpointType,
 		Nonce:   "1",
 	}, streamEDS(t, cc, "default/kuard/foo"))
@@ -214,12 +213,9 @@ func TestEndpointFilter(t *testing.T) {
 	assertEqual(t, &v2.DiscoveryResponse{
 		VersionInfo: "1",
 		TypeUrl:     endpointType,
-		Resources: []types.Any{
-			any(t, clusterloadassignment(
-				"default/kuard/bar",
-			)),
-		},
-
+		Resources: resources(t,
+			envoy.ClusterLoadAssignment("default/kuard/bar"),
+		),
 		Nonce: "1",
 	}, streamEDS(t, cc, "default/kuard/bar"))
 
@@ -242,9 +238,9 @@ func TestIssue602(t *testing.T) {
 	// Assert endpoint was added
 	assertEqual(t, &v2.DiscoveryResponse{
 		VersionInfo: "1",
-		Resources: []types.Any{
-			any(t, clusterloadassignment("default/simple", envoy.LBEndpoint("192.168.183.24", 8080))),
-		},
+		Resources: resources(t,
+			envoy.ClusterLoadAssignment("default/simple", envoy.SocketAddress("192.168.183.24", 8080)),
+		),
 		TypeUrl: endpointType,
 		Nonce:   "1",
 	}, streamEDS(t, cc))
@@ -288,16 +284,4 @@ func addresses(ips ...string) []v1.EndpointAddress {
 		addrs = append(addrs, v1.EndpointAddress{IP: ip})
 	}
 	return addrs
-}
-
-func clusterloadassignment(name string, lbendpoints ...endpoint.LbEndpoint) *v2.ClusterLoadAssignment {
-	if len(lbendpoints) == 0 {
-		return &v2.ClusterLoadAssignment{ClusterName: name}
-	}
-	return &v2.ClusterLoadAssignment{
-		ClusterName: name,
-		Endpoints: []endpoint.LocalityLbEndpoints{{
-			LbEndpoints: lbendpoints,
-		}},
-	}
 }

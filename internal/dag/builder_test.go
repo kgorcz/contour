@@ -995,6 +995,36 @@ func TestDAGInsert(t *testing.T) {
 		},
 	}
 
+	// ir10 has a websocket route w/multiple upstreams
+	ir10b := &ingressroutev1.IngressRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-com",
+			Namespace: "default",
+		},
+		Spec: ingressroutev1.IngressRouteSpec{
+			VirtualHost: &ingressroutev1.VirtualHost{
+				Fqdn: "example.com",
+			},
+			Routes: []ingressroutev1.Route{{
+				Match: "/",
+				Services: []ingressroutev1.Service{{
+					Name: "kuard",
+					Port: 8080,
+				}},
+			}, {
+				Match:            "/websocket",
+				EnableWebsockets: true,
+				Services: []ingressroutev1.Service{{
+					Name: "kuard",
+					Port: 8080,
+				}, {
+					Name: "kuard",
+					Port: 8080,
+				}},
+			}},
+		},
+	}
+
 	// ir11 has a prefix-rewrite route
 	ir11 := &ingressroutev1.IngressRoute{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1432,31 +1462,46 @@ func TestDAGInsert(t *testing.T) {
 	}
 
 	tests := map[string]struct {
-		objs []interface{}
-		want []Vertex
+		objs                  []interface{}
+		disablePermitInsecure bool
+		want                  []Vertex
 	}{
+		"insert ingress w/ default backend w/o matching service": {
+			objs: []interface{}{
+				i1,
+			},
+			want: listeners(),
+		},
 		"insert ingress w/ default backend": {
 			objs: []interface{}{
 				i1,
+				s1,
 			},
 			want: listeners(
 				&Listener{
 					Port: 80,
 					VirtualHosts: virtualhosts(
-						virtualhost("*", prefixroute("/")),
+						virtualhost("*", prefixroute("/", httpService(s1))),
 					),
 				},
 			),
 		},
+		"insert ingress w/ single unnamed backend w/o matching service": {
+			objs: []interface{}{
+				i2,
+			},
+			want: listeners(),
+		},
 		"insert ingress w/ single unnamed backend": {
 			objs: []interface{}{
 				i2,
+				s1,
 			},
 			want: listeners(
 				&Listener{
 					Port: 80,
 					VirtualHosts: virtualhosts(
-						virtualhost("*", prefixroute("/")),
+						virtualhost("*", prefixroute("/", httpService(s1))),
 					),
 				},
 			),
@@ -1467,57 +1512,22 @@ func TestDAGInsert(t *testing.T) {
 			},
 			want: listeners(),
 		},
-		"insert ingress w/ host name and single backend": {
+		"insert ingress w/ host name and single backend w/o matching service": {
 			objs: []interface{}{
 				i3,
 			},
-			want: listeners(
-				&Listener{
-					Port: 80,
-					VirtualHosts: virtualhosts(
-						virtualhost("kuard.example.com", prefixroute("/")),
-					),
-				},
-			),
+			want: listeners(),
 		},
-		"insert ingress w/ default backend then matching service": {
+		"insert ingress w/ host name and single backend": {
 			objs: []interface{}{
-				i1,
+				i3,
 				s1,
 			},
 			want: listeners(
 				&Listener{
 					Port: 80,
 					VirtualHosts: virtualhosts(
-						virtualhost("*", prefixroute("/", httpService(s1))),
-					),
-				},
-			),
-		},
-		"insert service then ingress w/ default backend": {
-			objs: []interface{}{
-				s1,
-				i1,
-			},
-			want: listeners(
-				&Listener{
-					Port: 80,
-					VirtualHosts: virtualhosts(
-						virtualhost("*", prefixroute("/", httpService(s1))),
-					),
-				},
-			),
-		},
-		"insert ingress w/ default backend then non-matching service": {
-			objs: []interface{}{
-				i1,
-				s2,
-			},
-			want: listeners(
-				&Listener{
-					Port: 80,
-					VirtualHosts: virtualhosts(
-						virtualhost("*", prefixroute("/")),
+						virtualhost("kuard.example.com", prefixroute("/", httpService(s1))),
 					),
 				},
 			),
@@ -1527,56 +1537,21 @@ func TestDAGInsert(t *testing.T) {
 				s2,
 				i1,
 			},
-			want: listeners(
-				&Listener{
-					Port: 80,
-					VirtualHosts: virtualhosts(
-						virtualhost("*", prefixroute("/")),
-					),
-				},
-			),
+			want: listeners(),
 		},
 		"insert ingress w/ default backend then matching service with wrong port": {
 			objs: []interface{}{
 				i1,
 				s3,
 			},
-			want: listeners(
-				&Listener{
-					Port: 80,
-					VirtualHosts: virtualhosts(
-						virtualhost("*", prefixroute("/")),
-					),
-				},
-			),
+			want: listeners(),
 		},
 		"insert unnamed ingress w/ single backend then matching service with wrong port": {
 			objs: []interface{}{
 				i2,
 				s3,
 			},
-			want: listeners(
-				&Listener{
-					Port: 80,
-					VirtualHosts: virtualhosts(
-						virtualhost("*", prefixroute("/")),
-					),
-				},
-			),
-		},
-		"insert service then matching unnamed ingress w/ single backend but wrong port": {
-			objs: []interface{}{
-				s3,
-				i2,
-			},
-			want: listeners(
-				&Listener{
-					Port: 80,
-					VirtualHosts: virtualhosts(
-						virtualhost("*", prefixroute("/")),
-					),
-				},
-			),
+			want: listeners(),
 		},
 		"insert ingress w/ default backend then matching service w/ named port": {
 			objs: []interface{}{
@@ -1638,10 +1613,18 @@ func TestDAGInsert(t *testing.T) {
 			objs: []interface{}{
 				sec1,
 			},
-			want: []Vertex{},
+			want: listeners(),
 		},
 		"insert secret then ingress w/o tls": {
 			objs: []interface{}{
+				sec1,
+				i1,
+			},
+			want: listeners(),
+		},
+		"insert service, secret then ingress w/o tls": {
+			objs: []interface{}{
+				s1,
 				sec1,
 				i1,
 			},
@@ -1649,7 +1632,7 @@ func TestDAGInsert(t *testing.T) {
 				&Listener{
 					Port: 80,
 					VirtualHosts: virtualhosts(
-						virtualhost("*", prefixroute("/")),
+						virtualhost("*", prefixroute("/", httpService(s1))),
 					),
 				},
 			),
@@ -1661,15 +1644,30 @@ func TestDAGInsert(t *testing.T) {
 			},
 			want: listeners(
 				&Listener{
+					Port: 443,
+					VirtualHosts: virtualhosts(
+						securevirtualhost("kuard.example.com", sec1),
+					),
+				},
+			),
+		},
+		"insert service, secret then ingress w/ tls": {
+			objs: []interface{}{
+				s1,
+				sec1,
+				i3,
+			},
+			want: listeners(
+				&Listener{
 					Port: 80,
 					VirtualHosts: virtualhosts(
-						virtualhost("kuard.example.com", prefixroute("/")),
+						virtualhost("kuard.example.com", prefixroute("/", httpService(s1))),
 					),
 				},
 				&Listener{
 					Port: 443,
 					VirtualHosts: virtualhosts(
-						securevirtualhost("kuard.example.com", sec1, prefixroute("/")),
+						securevirtualhost("kuard.example.com", sec1, prefixroute("/", httpService(s1))),
 					),
 				},
 			),
@@ -1679,11 +1677,19 @@ func TestDAGInsert(t *testing.T) {
 				sec2,
 				i1,
 			},
+			want: listeners(),
+		},
+		"insert service, invalid secret then ingress w/o tls": {
+			objs: []interface{}{
+				s1,
+				sec2,
+				i1,
+			},
 			want: listeners(
 				&Listener{
 					Port: 80,
 					VirtualHosts: virtualhosts(
-						virtualhost("*", prefixroute("/")),
+						virtualhost("*", prefixroute("/", httpService(s1))),
 					),
 				},
 			),
@@ -1693,31 +1699,19 @@ func TestDAGInsert(t *testing.T) {
 				sec2,
 				i3,
 			},
-			want: listeners(
-				&Listener{
-					Port: 80,
-					VirtualHosts: virtualhosts(
-						virtualhost("kuard.example.com", prefixroute("/")),
-					),
-				},
-			),
+			want: listeners(),
 		},
-		"insert ingress w/ tls then secret": {
+		"insert service, invalid secret then ingress w/ tls": {
 			objs: []interface{}{
+				s1,
+				sec2,
 				i3,
-				sec1,
 			},
 			want: listeners(
 				&Listener{
 					Port: 80,
 					VirtualHosts: virtualhosts(
-						virtualhost("kuard.example.com", prefixroute("/")),
-					),
-				},
-				&Listener{
-					Port: 443,
-					VirtualHosts: virtualhosts(
-						securevirtualhost("kuard.example.com", sec1, prefixroute("/")),
+						virtualhost("kuard.example.com", prefixroute("/", httpService(s1))),
 					),
 				},
 			),
@@ -1726,15 +1720,7 @@ func TestDAGInsert(t *testing.T) {
 			objs: []interface{}{
 				i6,
 			},
-			want: listeners(
-				&Listener{
-					Port: 80,
-					VirtualHosts: virtualhosts(
-						virtualhost("a.example.com", prefixroute("/")),
-						virtualhost("b.example.com", prefixroute("/")),
-					),
-				},
-			),
+			want: nil, // no matching service
 		},
 		"insert ingress w/ two vhosts then matching service": {
 			objs: []interface{}{
@@ -1808,17 +1794,17 @@ func TestDAGInsert(t *testing.T) {
 				},
 			),
 		},
-		"insert ingress w/ two paths": {
+		"insert ingress w/ two paths then one service": {
 			objs: []interface{}{
 				i7,
+				s1,
 			},
 			want: listeners(
 				&Listener{
 					Port: 80,
 					VirtualHosts: virtualhosts(
 						virtualhost("b.example.com",
-							prefixroute("/"),
-							prefixroute("/kuarder"),
+							prefixroute("/", httpService(s1)),
 						),
 					),
 				},
@@ -2085,6 +2071,21 @@ func TestDAGInsert(t *testing.T) {
 				},
 			),
 		},
+		"insert ingressroute with multiple upstreams prefix rewrite route, websocket routes are dropped": {
+			objs: []interface{}{
+				ir10b, s1,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("example.com",
+							prefixroute("/", httpService(s1)),
+						),
+					),
+				},
+			),
+		},
 		"insert ingressroute and service": {
 			objs: []interface{}{
 				ir1, s1,
@@ -2120,6 +2121,7 @@ func TestDAGInsert(t *testing.T) {
 			objs: []interface{}{
 				ir14, s1, sec1,
 			},
+			disablePermitInsecure: false,
 			want: listeners(
 				&Listener{
 					Port: 80,
@@ -2130,6 +2132,25 @@ func TestDAGInsert(t *testing.T) {
 					Port: 443,
 					VirtualHosts: virtualhosts(
 						securevirtualhost("foo.com", sec1, prefixroute("/", httpService(s1))),
+					),
+				},
+			),
+		},
+		"insert ingressroute with TLS one insecure - disablePermitInsecure=true": {
+			objs: []interface{}{
+				ir14, s1, sec1,
+			},
+			disablePermitInsecure: true,
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("foo.com", routeUpgrade("/", httpService(s1))),
+					),
+				}, &Listener{
+					Port: 443,
+					VirtualHosts: virtualhosts(
+						securevirtualhost("foo.com", sec1, routeUpgrade("/", httpService(s1))),
 					),
 				},
 			),
@@ -2973,11 +2994,15 @@ func TestDAGInsert(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			var kc KubernetesCache
-			for _, o := range tc.objs {
-				kc.Insert(o)
+			builder := Builder{
+				DisablePermitInsecure: tc.disablePermitInsecure,
 			}
-			dag := BuildDAG(&kc)
+			for _, o := range tc.objs {
+				if !builder.Source.Insert(o) {
+					t.Logf("insert %v: failed", o)
+				}
+			}
+			dag := builder.Build()
 
 			got := make(map[int]*Listener)
 			dag.Visit(listenerMap(got).Visit)
@@ -3079,11 +3104,12 @@ func TestBuilderLookupHTTPService(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			b := builder{
-				source: &KubernetesCache{
+			b := Builder{
+				Source: KubernetesCache{
 					services: services,
 				},
 			}
+			b.reset()
 			got := b.lookupHTTPService(tc.Meta, tc.port)
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Fatal(diff)
@@ -3207,13 +3233,16 @@ func TestDAGRootNamespaces(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			kc := &KubernetesCache{
-				IngressRouteRootNamespaces: tc.rootNamespaces,
+			builder := Builder{
+				Source: KubernetesCache{
+					IngressRouteRootNamespaces: tc.rootNamespaces,
+				},
 			}
+
 			for _, o := range tc.objs {
-				kc.Insert(o)
+				builder.Source.Insert(o)
 			}
-			dag := BuildDAG(kc)
+			dag := builder.Build()
 
 			var count int
 			dag.Visit(func(v Vertex) {
@@ -3772,13 +3801,16 @@ func TestDAGIngressRouteStatus(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			kc := &KubernetesCache{
-				IngressRouteRootNamespaces: []string{"roots"},
+			builder := Builder{
+				Source: KubernetesCache{
+					IngressRouteRootNamespaces: []string{"roots"},
+				},
 			}
 			for _, o := range tc.objs {
-				kc.Insert(o)
+				builder.Source.Insert(o)
 			}
-			dag := BuildDAG(kc)
+			dag := builder.Build()
+
 			got := dag.Statuses()
 			if len(tc.want) != len(got) {
 				t.Fatalf("expected:\n%v\ngot\n%v", tc.want, got)
@@ -3910,11 +3942,12 @@ func TestDAGIngressRouteUniqueFQDNs(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			var kc KubernetesCache
+			var builder Builder
 			for _, o := range tc.objs {
-				kc.Insert(o)
+				builder.Source.Insert(o)
 			}
-			dag := BuildDAG(&kc)
+			dag := builder.Build()
+
 			got := make(map[int]*Listener)
 			dag.Visit(listenerMap(got).Visit)
 
@@ -4090,6 +4123,9 @@ func TestSplitSecret(t *testing.T) {
 }
 
 func routes(v ...Vertex) map[string]Vertex {
+	if len(v) == 0 {
+		return nil
+	}
 	m := make(map[string]Vertex)
 	for _, r := range v {
 		switch r := r.(type) {
@@ -4104,7 +4140,8 @@ func routes(v ...Vertex) map[string]Vertex {
 	return m
 }
 
-func prefixroute(prefix string, services ...*HTTPService) *PrefixRoute {
+func prefixroute(prefix string, first *HTTPService, rest ...*HTTPService) *PrefixRoute {
+	services := append([]*HTTPService{first}, rest...)
 	route := PrefixRoute{
 		Prefix: prefix,
 	}
@@ -4126,20 +4163,20 @@ func routeCluster(prefix string, clusters ...*Cluster) *PrefixRoute {
 	return &route
 }
 
-func routeUpgrade(prefix string, services ...*HTTPService) *PrefixRoute {
-	r := prefixroute(prefix, services...)
+func routeUpgrade(prefix string, first *HTTPService, rest ...*HTTPService) *PrefixRoute {
+	r := prefixroute(prefix, first, rest...)
 	r.HTTPSUpgrade = true
 	return r
 }
 
-func routeRewrite(prefix, rewrite string, services ...*HTTPService) *PrefixRoute {
-	r := prefixroute(prefix, services...)
+func routeRewrite(prefix, rewrite string, first *HTTPService, rest ...*HTTPService) *PrefixRoute {
+	r := prefixroute(prefix, first, rest...)
 	r.PrefixRewrite = rewrite
 	return r
 }
 
-func routeWebsocket(prefix string, services ...*HTTPService) *PrefixRoute {
-	r := prefixroute(prefix, services...)
+func routeWebsocket(prefix string, first *HTTPService, rest ...*HTTPService) *PrefixRoute {
+	r := prefixroute(prefix, first, rest...)
 	r.Websocket = true
 	return r
 }

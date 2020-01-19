@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/envoyproxy/go-control-plane/envoy/api/v2/auth"
 	"github.com/sirupsen/logrus"
 
 	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
@@ -65,10 +66,13 @@ type ListenerVisitorConfig struct {
 	// If not set, defaults to DEFAULT_HTTPS_ACCESS_LOG.
 	HTTPSAccessLog string
 
-	// UseProxyProto configurs all listeners to expect a PROXY
+	// UseProxyProto configures all listeners to expect a PROXY
 	// V1 or V2 preamble.
 	// If not set, defaults to false.
 	UseProxyProto bool
+
+	// MinimumProtocolVersion defines the min tls protocol version to be used
+	MinimumProtocolVersion auth.TlsParameters_TlsProtocol
 }
 
 // httpAddress returns the port for the HTTP (non TLS)
@@ -125,6 +129,15 @@ func (lvc *ListenerVisitorConfig) httpsAccessLog() string {
 	return DEFAULT_HTTPS_ACCESS_LOG
 }
 
+// minProtocolVersion returns the requested minimum TLS protocol
+// version or auth.TlsParameters_TLSv1_1 if not configured {
+func (lvc *ListenerVisitorConfig) minProtoVersion() auth.TlsParameters_TlsProtocol {
+	if lvc.MinimumProtocolVersion > auth.TlsParameters_TLSv1_1 {
+		return lvc.MinimumProtocolVersion
+	}
+	return auth.TlsParameters_TLSv1_1
+}
+
 // ListenerCache manages the contents of the gRPC LDS cache.
 type ListenerCache struct {
 	mu           sync.Mutex
@@ -169,13 +182,8 @@ func (c *ListenerCache) Update(v map[string]*v2.Listener) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.values = v
-	c.notify()
-}
-
-// notify notifies all registered waiters that an event has occurred.
-func (c *ListenerCache) notify() {
 	c.last++
+	c.values = v
 
 	for _, ch := range c.waiters {
 		ch <- c.last
@@ -294,6 +302,13 @@ func secureProxyProtocol(useProxy bool) []listener.ListenerFilter {
 }
 
 func (v *listenerVisitor) visit(vertex dag.Vertex) {
+	max := func(a, b auth.TlsParameters_TlsProtocol) auth.TlsParameters_TlsProtocol {
+		if a > b {
+			return a
+		}
+		return b
+	}
+
 	switch vh := vertex.(type) {
 	case *dag.VirtualHost:
 		// we only create on http listener so record the fact
@@ -315,23 +330,17 @@ func (v *listenerVisitor) visit(vertex dag.Vertex) {
 		if vh.VirtualHost.Port != 443 {
 			logrus.Info("Creating tcp virtual host: ", vh.VirtualHost.Name, " | ", vh.VirtualHost.Port)
 			name := "ingress_tcp_port_" + strconv.Itoa(vh.VirtualHost.Port)
-			fc := listener.FilterChain{
-				Filters: []listener.Filter{
-					envoy.TCPProxy(name, vh.TCPProxy, v.httpsAccessLog()),
-				},
+			filters = []listener.Filter{
+				envoy.TCPProxy(name, vh.TCPProxy, v.httpsAccessLog()),
 			}
 			alpnProtos = nil // do not offer ALPN
-
-			// attach certificate data to this listener if provided.
-			if vh.Secret != nil && len(vh.Secret.Cert()) > 0 && len(vh.Secret.PrivateKey()) > 0 {
-				fc.TlsContext = envoy.DownstreamTLSContext(vh.Secret.Name(), vh.MinProtoVersion, alpnProtos...)
-			}
 
 			v.listeners[name] = &v2.Listener{
 				Name:    name,
 				Address: *envoy.SocketAddress("0.0.0.0", vh.VirtualHost.Port),
 				FilterChains: []listener.FilterChain{
-					fc,
+					envoy.FilterChainTLS(vh.VirtualHost.Name, vh.Secret, filters,
+						max(v.ListenerVisitorConfig.minProtoVersion(), vh.MinProtoVersion), alpnProtos...),
 				},
 			}
 			return
@@ -339,18 +348,13 @@ func (v *listenerVisitor) visit(vertex dag.Vertex) {
 
 		logrus.Info("Creating https virtual host: ", vh.VirtualHost.Name, " | ", vh.VirtualHost.Port)
 
-		// new
-		fc := listener.FilterChain{
-			FilterChainMatch: &listener.FilterChainMatch{
-				ServerNames: []string{vh.VirtualHost.Name},
-			},
-			Filters: filters,
-		}
-
-		// attach certificate data to this listener if provided.
-		if vh.Secret != nil && len(vh.Secret.Cert()) > 0 && len(vh.Secret.PrivateKey()) > 0 {
-			fc.TlsContext = envoy.DownstreamTLSContext(vh.Secret.Name(), vh.MinProtoVersion, alpnProtos...)
-		}
+		fc := envoy.FilterChainTLS(
+			vh.VirtualHost.Name,
+			vh.Secret,
+			filters,
+			max(v.ListenerVisitorConfig.minProtoVersion(), vh.MinProtoVersion), // choose the higher of the configured or requested tls version
+			alpnProtos...,
+		)
 
 		v.listeners[ENVOY_HTTPS_LISTENER].FilterChains = append(v.listeners[ENVOY_HTTPS_LISTENER].FilterChains, fc)
 	default:

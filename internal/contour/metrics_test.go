@@ -14,9 +14,9 @@
 package contour
 
 import (
-	"reflect"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
 	"github.com/heptio/contour/internal/dag"
 	"github.com/heptio/contour/internal/metrics"
@@ -564,28 +564,19 @@ func TestIngressRouteMetrics(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			kc := &dag.KubernetesCache{
-				IngressRouteRootNamespaces: tc.rootNamespaces,
+			builder := dag.Builder{
+				Source: dag.KubernetesCache{
+					IngressRouteRootNamespaces: tc.rootNamespaces,
+				},
 			}
 			for _, o := range tc.objs {
-				kc.Insert(o)
+				builder.Source.Insert(o)
 			}
-			dag := dag.BuildDAG(kc)
-			gotMetrics := calculateIngressRouteMetric(dag)
-			if !reflect.DeepEqual(tc.want.Root, gotMetrics.Root) {
-				t.Fatalf("(metrics-Root) expected to find: %v but got: %v", tc.want.Root, gotMetrics.Root)
-			}
-			if !reflect.DeepEqual(tc.want.Valid, gotMetrics.Valid) {
-				t.Fatalf("(metrics-Valid) expected to find: %v but got: %v", tc.want.Valid, gotMetrics.Valid)
-			}
-			if !reflect.DeepEqual(tc.want.Invalid, gotMetrics.Invalid) {
-				t.Fatalf("(metrics-Invalid) expected to find: %v but got: %v", tc.want.Invalid, gotMetrics.Invalid)
-			}
-			if !reflect.DeepEqual(tc.want.Orphaned, gotMetrics.Orphaned) {
-				t.Fatalf("(metrics-Orphaned) expected to find: %v but got: %v", tc.want.Orphaned, gotMetrics.Orphaned)
-			}
-			if !reflect.DeepEqual(tc.want.Total, gotMetrics.Total) {
-				t.Fatalf("(metrics-Total) expected to find: %v but got: %v", tc.want.Total, gotMetrics.Total)
+			dag := builder.Build()
+
+			got := calculateIngressRouteMetric(dag.Statuses())
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Fatal(diff)
 			}
 		})
 	}

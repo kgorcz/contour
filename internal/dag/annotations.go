@@ -18,7 +18,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gogo/protobuf/types"
 	"k8s.io/api/extensions/v1beta1"
 )
 
@@ -43,16 +42,6 @@ const (
 func parseAnnotation(annotations map[string]string, annotation string) int {
 	v, _ := strconv.ParseInt(annotations[annotation], 10, 32)
 	return int(v)
-}
-
-// parseAnnotationUint32 parsers the annotation map for the supplied annotation key.
-// If the value is not present, or malformed, then nil is returned.
-func parseAnnotationUInt32(annotations map[string]string, annotation string) *types.UInt32Value {
-	v, err := strconv.ParseUint(annotations[annotation], 10, 32)
-	if err != nil {
-		return nil
-	}
-	return &types.UInt32Value{Value: uint32(v)}
 }
 
 // parseUpstreamProtocols parses the annotations map for a contour.heptio.com/upstream-protocol.{protocol}
@@ -93,4 +82,23 @@ func websocketRoutes(i *v1beta1.Ingress) map[string]bool {
 		}
 	}
 	return routes
+}
+
+// getIngressClassAnnotation checks for the acceptable ingress class annotations
+// 1. contour.heptio.com/ingress.class
+// 2. kubernetes.io/ingress.class
+//
+// it returns the first matching ingress annotation (in the above order) with test
+func getIngressClassAnnotation(annotations map[string]string) string {
+	class, ok := annotations["contour.heptio.com/ingress.class"]
+	if ok {
+		return class
+	}
+
+	class, ok = annotations["kubernetes.io/ingress.class"]
+	if ok {
+		return class
+	}
+
+	return ""
 }

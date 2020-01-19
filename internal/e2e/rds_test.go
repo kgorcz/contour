@@ -24,10 +24,8 @@ import (
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/route"
 	"github.com/gogo/protobuf/types"
 	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
-	"github.com/heptio/contour/apis/generated/clientset/versioned/fake"
 	"github.com/heptio/contour/internal/contour"
 	"github.com/heptio/contour/internal/envoy"
-	"github.com/heptio/contour/internal/k8s"
 	"google.golang.org/grpc"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/api/extensions/v1beta1"
@@ -98,7 +96,7 @@ func TestEditIngress(t *testing.T) {
 
 	// check that it's been translated correctly.
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "2",
+		VersionInfo: "1",
 		Resources: []types.Any{
 			any(t, &v2.RouteConfiguration{
 				Name: "ingress_http",
@@ -117,7 +115,7 @@ func TestEditIngress(t *testing.T) {
 			}),
 		},
 		TypeUrl: routeType,
-		Nonce:   "2",
+		Nonce:   "1",
 	}, streamRDS(t, cc))
 
 	// update old to new
@@ -142,7 +140,7 @@ func TestEditIngress(t *testing.T) {
 
 	// check that ingress_http has been updated.
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "3",
+		VersionInfo: "2",
 		Resources: []types.Any{
 			any(t, &v2.RouteConfiguration{
 				Name: "ingress_http",
@@ -161,7 +159,7 @@ func TestEditIngress(t *testing.T) {
 			}),
 		},
 		TypeUrl: routeType,
-		Nonce:   "3",
+		Nonce:   "2",
 	}, streamRDS(t, cc))
 }
 
@@ -303,7 +301,7 @@ func TestEditIngressInPlace(t *testing.T) {
 	rh.OnAdd(s2)
 
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "3",
+		VersionInfo: "2",
 		Resources: []types.Any{
 			any(t, &v2.RouteConfiguration{
 				Name: "ingress_http",
@@ -322,7 +320,7 @@ func TestEditIngressInPlace(t *testing.T) {
 			}),
 		},
 		TypeUrl: routeType,
-		Nonce:   "3",
+		Nonce:   "2",
 	}, streamRDS(t, cc))
 
 	// i2 is like i1 but adds a second route
@@ -353,7 +351,7 @@ func TestEditIngressInPlace(t *testing.T) {
 	}
 	rh.OnUpdate(i1, i2)
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "4",
+		VersionInfo: "3",
 		Resources: []types.Any{
 			any(t, &v2.RouteConfiguration{
 				Name: "ingress_http",
@@ -376,7 +374,7 @@ func TestEditIngressInPlace(t *testing.T) {
 			}),
 		},
 		TypeUrl: routeType,
-		Nonce:   "4",
+		Nonce:   "3",
 	}, streamRDS(t, cc))
 
 	// i3 is like i2, but adds the ingress.kubernetes.io/force-ssl-redirect: "true" annotation
@@ -412,7 +410,7 @@ func TestEditIngressInPlace(t *testing.T) {
 	}
 	rh.OnUpdate(i2, i3)
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "5",
+		VersionInfo: "4",
 		Resources: []types.Any{
 			any(t, &v2.RouteConfiguration{
 				Name: "ingress_http",
@@ -430,7 +428,7 @@ func TestEditIngressInPlace(t *testing.T) {
 			any(t, &v2.RouteConfiguration{Name: "ingress_https"}),
 		},
 		TypeUrl: routeType,
-		Nonce:   "5",
+		Nonce:   "4",
 	}, streamRDS(t, cc))
 
 	rh.OnAdd(&v1.Secret{
@@ -483,7 +481,7 @@ func TestEditIngressInPlace(t *testing.T) {
 	}
 	rh.OnUpdate(i3, i4)
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "7",
+		VersionInfo: "5",
 		Resources: []types.Any{
 			any(t, &v2.RouteConfiguration{
 				Name: "ingress_http",
@@ -515,7 +513,7 @@ func TestEditIngressInPlace(t *testing.T) {
 				}}}),
 		},
 		TypeUrl: routeType,
-		Nonce:   "7",
+		Nonce:   "5",
 	}, streamRDS(t, cc))
 }
 
@@ -552,7 +550,7 @@ func TestRequestTimeout(t *testing.T) {
 		},
 	}
 	rh.OnAdd(i1)
-	assertRDS(t, cc, "2", []route.VirtualHost{{
+	assertRDS(t, cc, "1", []route.VirtualHost{{
 		Name:    "*",
 		Domains: []string{"*"},
 		Routes: []route.Route{{
@@ -574,7 +572,7 @@ func TestRequestTimeout(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(i1, i2)
-	assertRDS(t, cc, "3", []route.VirtualHost{{
+	assertRDS(t, cc, "2", []route.VirtualHost{{
 		Name:    "*",
 		Domains: []string{"*"},
 		Routes: []route.Route{{
@@ -596,7 +594,7 @@ func TestRequestTimeout(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(i2, i3)
-	assertRDS(t, cc, "4", []route.VirtualHost{{
+	assertRDS(t, cc, "3", []route.VirtualHost{{
 		Name:    "*",
 		Domains: []string{"*"},
 		Routes: []route.Route{{
@@ -618,7 +616,7 @@ func TestRequestTimeout(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(i3, i4)
-	assertRDS(t, cc, "5", []route.VirtualHost{{
+	assertRDS(t, cc, "4", []route.VirtualHost{{
 		Name:    "*",
 		Domains: []string{"*"},
 		Routes: []route.Route{{
@@ -814,7 +812,7 @@ func TestInvalidCertInIngress(t *testing.T) {
 		},
 	})
 
-	assertRDS(t, cc, "3", []route.VirtualHost{{ // ingress_http
+	assertRDS(t, cc, "1", []route.VirtualHost{{ // ingress_http
 		Name:    "kuard.io",
 		Domains: domains("kuard.io"),
 		Routes: []route.Route{{
@@ -837,7 +835,7 @@ func TestInvalidCertInIngress(t *testing.T) {
 		},
 	})
 
-	assertRDS(t, cc, "4", []route.VirtualHost{{ // ingress_http
+	assertRDS(t, cc, "2", []route.VirtualHost{{ // ingress_http
 		Name:    "kuard.io",
 		Domains: domains("kuard.io"),
 		Routes: []route.Route{{
@@ -1165,7 +1163,7 @@ func TestWebsocketIngress(t *testing.T) {
 		},
 	})
 
-	assertRDS(t, cc, "2", []route.VirtualHost{{
+	assertRDS(t, cc, "1", []route.VirtualHost{{
 		Name:    "websocket.hello.world",
 		Domains: domains("websocket.hello.world"),
 		Routes: []route.Route{{
@@ -1225,7 +1223,7 @@ func TestWebsocketIngressRoute(t *testing.T) {
 		},
 	})
 
-	assertRDS(t, cc, "2", []route.VirtualHost{{
+	assertRDS(t, cc, "1", []route.VirtualHost{{
 		Name:    "websocket.hello.world",
 		Domains: domains("websocket.hello.world"),
 		Routes: []route.Route{{
@@ -1243,6 +1241,85 @@ func TestWebsocketIngressRoute(t *testing.T) {
 		}},
 	}}, nil)
 }
+
+func TestWebsocketIngressRoute_MultipleUpstreams(t *testing.T) {
+	rh, cc, done := setup(t)
+	defer done()
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ws",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       80,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ws2",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       80,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	rh.OnAdd(&ingressroutev1.IngressRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: ingressroutev1.IngressRouteSpec{
+			VirtualHost: &ingressroutev1.VirtualHost{Fqdn: "websocket.hello.world"},
+			Routes: []ingressroutev1.Route{{
+				Match: "/",
+				Services: []ingressroutev1.Service{{
+					Name: "ws",
+					Port: 80,
+				}},
+			}, {
+				Match:            "/ws-1",
+				EnableWebsockets: true,
+				Services: []ingressroutev1.Service{{
+					Name: "ws",
+					Port: 80,
+				},
+					{
+						Name: "ws2",
+						Port: 80,
+					}},
+			}, {
+				Match:            "/ws-2",
+				EnableWebsockets: true,
+				Services: []ingressroutev1.Service{{
+					Name: "ws",
+					Port: 80,
+				}},
+			}},
+		},
+	})
+
+	assertRDS(t, cc, "1", []route.VirtualHost{{
+		Name:    "websocket.hello.world",
+		Domains: domains("websocket.hello.world"),
+		Routes: []route.Route{{
+			Match:               envoy.RoutePrefix("/"), // match all
+			Action:              routecluster("default/ws/80/da39a3ee5e"),
+			RequestHeadersToAdd: envoy.RouteHeaders(),
+		}},
+	}}, nil)
+}
+
 func TestPrefixRewriteIngressRoute(t *testing.T) {
 	rh, cc, done := setup(t)
 	defer done()
@@ -1292,7 +1369,7 @@ func TestPrefixRewriteIngressRoute(t *testing.T) {
 		},
 	})
 
-	assertRDS(t, cc, "2", []route.VirtualHost{{
+	assertRDS(t, cc, "1", []route.VirtualHost{{
 		Name:    "prefixrewrite.hello.world",
 		Domains: domains("prefixrewrite.hello.world"),
 		Routes: []route.Route{{
@@ -1392,7 +1469,7 @@ func TestDefaultBackendDoesNotOverwriteNamedHost(t *testing.T) {
 	})
 
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "3",
+		VersionInfo: "1",
 		Resources: []types.Any{
 			any(t, &v2.RouteConfiguration{
 				Name: "ingress_http",
@@ -1420,16 +1497,13 @@ func TestDefaultBackendDoesNotOverwriteNamedHost(t *testing.T) {
 			}),
 		},
 		TypeUrl: routeType,
-		Nonce:   "3",
+		Nonce:   "1",
 	}, streamRDS(t, cc, "ingress_http"))
 }
 
 func TestRDSIngressRouteInsideRootNamespaces(t *testing.T) {
-	rh, cc, done := setup(t, func(reh *contour.ResourceEventHandler) {
-		reh.IngressRouteRootNamespaces = []string{"roots"}
-		reh.Notifier.(*contour.CacheHandler).IngressRouteStatus = &k8s.IngressRouteStatus{
-			Client: fake.NewSimpleClientset(),
-		}
+	rh, cc, done := setup(t, func(reh *contour.EventHandler) {
+		reh.Builder.Source.IngressRouteRootNamespaces = []string{"roots"}
 	})
 	defer done()
 
@@ -1469,7 +1543,7 @@ func TestRDSIngressRouteInsideRootNamespaces(t *testing.T) {
 	rh.OnAdd(ir1)
 
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "2",
+		VersionInfo: "1",
 		Resources: []types.Any{
 			any(t, &v2.RouteConfiguration{
 				Name: "ingress_http",
@@ -1485,16 +1559,13 @@ func TestRDSIngressRouteInsideRootNamespaces(t *testing.T) {
 			}),
 		},
 		TypeUrl: routeType,
-		Nonce:   "2",
+		Nonce:   "1",
 	}, streamRDS(t, cc, "ingress_http"))
 }
 
 func TestRDSIngressRouteOutsideRootNamespaces(t *testing.T) {
-	rh, cc, done := setup(t, func(reh *contour.ResourceEventHandler) {
-		reh.IngressRouteRootNamespaces = []string{"roots"}
-		reh.Notifier.(*contour.CacheHandler).IngressRouteStatus = &k8s.IngressRouteStatus{
-			Client: fake.NewSimpleClientset(),
-		}
+	rh, cc, done := setup(t, func(reh *contour.EventHandler) {
+		reh.Builder.Source.IngressRouteRootNamespaces = []string{"roots"}
 	})
 	defer done()
 
@@ -1534,14 +1605,14 @@ func TestRDSIngressRouteOutsideRootNamespaces(t *testing.T) {
 	rh.OnAdd(ir1)
 
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "2",
+		VersionInfo: "1",
 		Resources: []types.Any{
 			any(t, &v2.RouteConfiguration{
 				Name: "ingress_http",
 			}),
 		},
 		TypeUrl: routeType,
-		Nonce:   "2",
+		Nonce:   "1",
 	}, streamRDS(t, cc, "ingress_http"))
 }
 
@@ -1549,8 +1620,8 @@ func TestRDSIngressRouteOutsideRootNamespaces(t *testing.T) {
 // in LDS or RDS, or even CDS, but this test mirrors the place it's
 // tested in internal/contour/route_test.go
 func TestRDSIngressRouteClassAnnotation(t *testing.T) {
-	rh, cc, done := setup(t, func(reh *contour.ResourceEventHandler) {
-		reh.IngressClass = "linkerd"
+	rh, cc, done := setup(t, func(reh *contour.EventHandler) {
+		reh.Builder.Source.IngressClass = "linkerd"
 	})
 	defer done()
 
@@ -1590,7 +1661,7 @@ func TestRDSIngressRouteClassAnnotation(t *testing.T) {
 	}
 
 	rh.OnAdd(ir1)
-	assertRDS(t, cc, "2", []route.VirtualHost{{
+	assertRDS(t, cc, "1", []route.VirtualHost{{
 		Name:    "www.example.com",
 		Domains: domains("www.example.com"),
 		Routes: []route.Route{{
@@ -1624,7 +1695,7 @@ func TestRDSIngressRouteClassAnnotation(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(ir1, ir2)
-	assertRDS(t, cc, "3", nil, nil)
+	assertRDS(t, cc, "2", nil, nil)
 
 	ir3 := &ingressroutev1.IngressRoute{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1650,7 +1721,7 @@ func TestRDSIngressRouteClassAnnotation(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(ir2, ir3)
-	assertRDS(t, cc, "3", nil, nil)
+	assertRDS(t, cc, "2", nil, nil)
 
 	ir4 := &ingressroutev1.IngressRoute{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1676,7 +1747,7 @@ func TestRDSIngressRouteClassAnnotation(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(ir3, ir4)
-	assertRDS(t, cc, "4", []route.VirtualHost{{
+	assertRDS(t, cc, "3", []route.VirtualHost{{
 		Name:    "www.example.com",
 		Domains: domains("www.example.com"),
 		Routes: []route.Route{{
@@ -1711,7 +1782,7 @@ func TestRDSIngressRouteClassAnnotation(t *testing.T) {
 	}
 	rh.OnUpdate(ir4, ir5)
 
-	assertRDS(t, cc, "5", []route.VirtualHost{{
+	assertRDS(t, cc, "4", []route.VirtualHost{{
 		Name:    "www.example.com",
 		Domains: domains("www.example.com"),
 		Routes: []route.Route{{
@@ -1722,15 +1793,15 @@ func TestRDSIngressRouteClassAnnotation(t *testing.T) {
 	}}, nil)
 
 	rh.OnUpdate(ir5, ir3)
-	assertRDS(t, cc, "6", nil, nil)
+	assertRDS(t, cc, "5", nil, nil)
 }
 
 // Test DAGAdapter.IngressClass setting works, this could be done
 // in LDS or RDS, or even CDS, but this test mirrors the place it's
 // tested in internal/contour/route_test.go
 func TestRDSIngressClassAnnotation(t *testing.T) {
-	rh, cc, done := setup(t, func(reh *contour.ResourceEventHandler) {
-		reh.IngressClass = "linkerd"
+	rh, cc, done := setup(t, func(reh *contour.EventHandler) {
+		reh.Builder.Source.IngressClass = "linkerd"
 	})
 	defer done()
 
@@ -1761,7 +1832,7 @@ func TestRDSIngressClassAnnotation(t *testing.T) {
 		},
 	}
 	rh.OnAdd(i1)
-	assertRDS(t, cc, "2", []route.VirtualHost{{
+	assertRDS(t, cc, "1", []route.VirtualHost{{
 		Name:    "*",
 		Domains: []string{"*"},
 		Routes: []route.Route{{
@@ -1787,7 +1858,7 @@ func TestRDSIngressClassAnnotation(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(i1, i2)
-	assertRDS(t, cc, "3", nil, nil)
+	assertRDS(t, cc, "2", nil, nil)
 
 	i3 := &v1beta1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1805,7 +1876,7 @@ func TestRDSIngressClassAnnotation(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(i2, i3)
-	assertRDS(t, cc, "3", nil, nil)
+	assertRDS(t, cc, "2", nil, nil)
 
 	i4 := &v1beta1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1823,7 +1894,7 @@ func TestRDSIngressClassAnnotation(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(i3, i4)
-	assertRDS(t, cc, "4", []route.VirtualHost{{
+	assertRDS(t, cc, "3", []route.VirtualHost{{
 		Name:    "*",
 		Domains: []string{"*"},
 		Routes: []route.Route{{
@@ -1849,7 +1920,7 @@ func TestRDSIngressClassAnnotation(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(i4, i5)
-	assertRDS(t, cc, "5", []route.VirtualHost{{
+	assertRDS(t, cc, "4", []route.VirtualHost{{
 		Name:    "*",
 		Domains: []string{"*"},
 		Routes: []route.Route{{
@@ -1860,7 +1931,7 @@ func TestRDSIngressClassAnnotation(t *testing.T) {
 	}}, nil)
 
 	rh.OnUpdate(i5, i3)
-	assertRDS(t, cc, "6", nil, nil)
+	assertRDS(t, cc, "5", nil, nil)
 }
 
 // issue 523, check for data races caused by accidentally
@@ -2031,7 +2102,7 @@ func TestRouteWithAServiceWeight(t *testing.T) {
 	}
 
 	rh.OnAdd(ir1)
-	assertRDS(t, cc, "2", []route.VirtualHost{{
+	assertRDS(t, cc, "1", []route.VirtualHost{{
 		Name:    "test2.test.com",
 		Domains: domains("test2.test.com"),
 		Routes: []route.Route{{
@@ -2064,7 +2135,7 @@ func TestRouteWithAServiceWeight(t *testing.T) {
 	}
 
 	rh.OnUpdate(ir1, ir2)
-	assertRDS(t, cc, "3", []route.VirtualHost{{
+	assertRDS(t, cc, "2", []route.VirtualHost{{
 		Name:    "test2.test.com",
 		Domains: domains("test2.test.com"),
 		Routes: []route.Route{{
@@ -2134,7 +2205,7 @@ func TestRouteWithTLS(t *testing.T) {
 
 	// check that ingress_http has been updated.
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "3",
+		VersionInfo: "1",
 		Resources: []types.Any{
 			any(t, &v2.RouteConfiguration{
 				Name: "ingress_http",
@@ -2159,7 +2230,7 @@ func TestRouteWithTLS(t *testing.T) {
 				}}}),
 		},
 		TypeUrl: routeType,
-		Nonce:   "3",
+		Nonce:   "1",
 	}, streamRDS(t, cc))
 }
 func TestRouteWithTLS_InsecurePaths(t *testing.T) {
@@ -2239,7 +2310,7 @@ func TestRouteWithTLS_InsecurePaths(t *testing.T) {
 
 	// check that ingress_http has been updated.
 	assertEqual(t, &v2.DiscoveryResponse{
-		VersionInfo: "4",
+		VersionInfo: "1",
 		Resources: []types.Any{
 			any(t, &v2.RouteConfiguration{
 				Name: "ingress_http",
@@ -2276,7 +2347,127 @@ func TestRouteWithTLS_InsecurePaths(t *testing.T) {
 				}}}),
 		},
 		TypeUrl: routeType,
-		Nonce:   "4",
+		Nonce:   "1",
+	}, streamRDS(t, cc))
+}
+
+func TestRouteWithTLS_InsecurePaths_DisablePermitInsecureTrue(t *testing.T) {
+	rh, cc, done := setup(t, func(reh *contour.EventHandler) {
+		reh.DisablePermitInsecure = true
+	})
+
+	defer done()
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       80,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	rh.OnAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "svc2",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Protocol:   "TCP",
+				Port:       80,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	})
+
+	rh.OnAdd(&v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-tls",
+			Namespace: "default",
+		},
+		Type: "kubernetes.io/tls",
+		Data: map[string][]byte{
+			v1.TLSCertKey:       []byte("certificate"),
+			v1.TLSPrivateKeyKey: []byte("key"),
+		},
+	})
+
+	ir1 := &ingressroutev1.IngressRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simple",
+			Namespace: "default",
+		},
+		Spec: ingressroutev1.IngressRouteSpec{
+			VirtualHost: &ingressroutev1.VirtualHost{
+				Fqdn: "test2.test.com",
+				TLS: &ingressroutev1.TLS{
+					SecretName: "example-tls",
+				},
+			},
+			Routes: []ingressroutev1.Route{{
+				Match:          "/insecure",
+				PermitInsecure: true,
+				Services: []ingressroutev1.Service{{
+					Name: "kuard",
+					Port: 80,
+				}},
+			}, {
+				Match: "/secure",
+				Services: []ingressroutev1.Service{{
+					Name: "svc2",
+					Port: 80,
+				}},
+			}},
+		},
+	}
+
+	rh.OnAdd(ir1)
+
+	// check that ingress_http has been updated.
+	assertEqual(t, &v2.DiscoveryResponse{
+		VersionInfo: "1",
+		Resources: []types.Any{
+			any(t, &v2.RouteConfiguration{
+				Name: "ingress_http",
+				VirtualHosts: []route.VirtualHost{{
+					Name:    "test2.test.com",
+					Domains: domains("test2.test.com"),
+					Routes: []route.Route{
+						{
+							Match:  envoy.RoutePrefix("/secure"),
+							Action: envoy.UpgradeHTTPS(),
+						}, {
+							Match:  envoy.RoutePrefix("/insecure"),
+							Action: envoy.UpgradeHTTPS(),
+						},
+					},
+				}}}),
+			any(t, &v2.RouteConfiguration{
+				Name: "ingress_https",
+				VirtualHosts: []route.VirtualHost{{
+					Name:    "test2.test.com",
+					Domains: domains("test2.test.com"),
+					Routes: []route.Route{
+						{
+							Match:               envoy.RoutePrefix("/secure"),
+							Action:              routecluster("default/svc2/80/da39a3ee5e"),
+							RequestHeadersToAdd: envoy.RouteHeaders(),
+						}, {
+							Match:               envoy.RoutePrefix("/insecure"),
+							Action:              routecluster("default/kuard/80/da39a3ee5e"),
+							RequestHeadersToAdd: envoy.RouteHeaders(),
+						},
+					},
+				}}}),
+		},
+		TypeUrl: routeType,
+		Nonce:   "1",
 	}, streamRDS(t, cc))
 }
 
@@ -2314,7 +2505,7 @@ func TestRouteRetryAnnotations(t *testing.T) {
 		},
 	}
 	rh.OnAdd(i1)
-	assertRDS(t, cc, "2", []route.VirtualHost{{
+	assertRDS(t, cc, "1", []route.VirtualHost{{
 		Name:    "*",
 		Domains: []string{"*"},
 		Routes: []route.Route{{
@@ -2367,7 +2558,7 @@ func TestRouteRetryIngressRoute(t *testing.T) {
 	}
 
 	rh.OnAdd(i1)
-	assertRDS(t, cc, "2", []route.VirtualHost{{
+	assertRDS(t, cc, "1", []route.VirtualHost{{
 		Name:    "test2.test.com",
 		Domains: domains("test2.test.com"),
 		Routes: []route.Route{{
@@ -2421,7 +2612,7 @@ func TestRouteTimeoutPolicyIngressRoute(t *testing.T) {
 		},
 	}
 	rh.OnAdd(i1)
-	assertRDS(t, cc, "2", []route.VirtualHost{{
+	assertRDS(t, cc, "1", []route.VirtualHost{{
 		Name:    "test2.test.com",
 		Domains: domains("test2.test.com"),
 		Routes: []route.Route{{
@@ -2452,7 +2643,7 @@ func TestRouteTimeoutPolicyIngressRoute(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(i1, i2)
-	assertRDS(t, cc, "3", []route.VirtualHost{{
+	assertRDS(t, cc, "2", []route.VirtualHost{{
 		Name:    "test2.test.com",
 		Domains: domains("test2.test.com"),
 		Routes: []route.Route{{
@@ -2482,7 +2673,7 @@ func TestRouteTimeoutPolicyIngressRoute(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(i2, i3)
-	assertRDS(t, cc, "4", []route.VirtualHost{{
+	assertRDS(t, cc, "3", []route.VirtualHost{{
 		Name:    "test2.test.com",
 		Domains: domains("test2.test.com"),
 		Routes: []route.Route{{
@@ -2512,7 +2703,7 @@ func TestRouteTimeoutPolicyIngressRoute(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(i3, i4)
-	assertRDS(t, cc, "5", []route.VirtualHost{{
+	assertRDS(t, cc, "4", []route.VirtualHost{{
 		Name:    "test2.test.com",
 		Domains: domains("test2.test.com"),
 		Routes: []route.Route{{
@@ -2565,7 +2756,7 @@ func TestRouteWithSessionAffinity(t *testing.T) {
 	}
 
 	rh.OnAdd(ir1)
-	assertRDS(t, cc, "2", []route.VirtualHost{{
+	assertRDS(t, cc, "1", []route.VirtualHost{{
 		Name:    "www.example.com",
 		Domains: domains("www.example.com"),
 		Routes: []route.Route{{
@@ -2598,7 +2789,7 @@ func TestRouteWithSessionAffinity(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(ir1, ir2)
-	assertRDS(t, cc, "3", []route.VirtualHost{{
+	assertRDS(t, cc, "2", []route.VirtualHost{{
 		Name:    "www.example.com",
 		Domains: domains("www.example.com"),
 		Routes: []route.Route{{
@@ -2641,7 +2832,7 @@ func TestRouteWithSessionAffinity(t *testing.T) {
 		},
 	}
 	rh.OnUpdate(ir2, ir3)
-	assertRDS(t, cc, "4", []route.VirtualHost{{
+	assertRDS(t, cc, "3", []route.VirtualHost{{
 		Name:    "www.example.com",
 		Domains: domains("www.example.com"),
 		Routes: []route.Route{{
@@ -2732,7 +2923,7 @@ func TestLoadBalancingStrategies(t *testing.T) {
 			},
 		},
 	}}
-	assertRDS(t, cc, "5", want, nil)
+	assertRDS(t, cc, "1", want, nil)
 }
 
 // issue 1234, assert that RoutePrefix and RouteRegex work as expected
@@ -2785,6 +2976,33 @@ func TestRoutePrefixRouteRegex(t *testing.T) {
 
 	// check that it's been translated correctly.
 	assertEqual(t, &v2.DiscoveryResponse{
+		VersionInfo: "1",
+		Resources: []types.Any{
+			any(t, &v2.RouteConfiguration{
+				Name: "ingress_http",
+				VirtualHosts: []route.VirtualHost{{
+					Name:    "*",
+					Domains: []string{"*"},
+					Routes: []route.Route{{
+						Match:               envoy.RouteRegex("/[^/]+/invoices(/.*|/?)"),
+						Action:              routecluster("default/kuard/80/da39a3ee5e"),
+						RequestHeadersToAdd: envoy.RouteHeaders(),
+					}, {
+						Match:               envoy.RoutePrefix("/"),
+						Action:              routecluster("default/kuard/80/da39a3ee5e"),
+						RequestHeadersToAdd: envoy.RouteHeaders(),
+					}},
+				}},
+			}),
+			any(t, &v2.RouteConfiguration{
+				Name: "ingress_https",
+			}),
+		},
+		TypeUrl: routeType,
+		Nonce:   "1",
+	}, streamRDS(t, cc))
+}
+
 		VersionInfo: "2",
 		Resources: []types.Any{
 			any(t, &v2.RouteConfiguration{
@@ -2816,16 +3034,16 @@ func assertRDS(t *testing.T, cc *grpc.ClientConn, versioninfo string, ingress_ht
 	t.Helper()
 	assertEqual(t, &v2.DiscoveryResponse{
 		VersionInfo: versioninfo,
-		Resources: []types.Any{
-			any(t, &v2.RouteConfiguration{
+		Resources: resources(t,
+			&v2.RouteConfiguration{
 				Name:         "ingress_http",
 				VirtualHosts: ingress_http,
-			}),
-			any(t, &v2.RouteConfiguration{
+			},
+			&v2.RouteConfiguration{
 				Name:         "ingress_https",
 				VirtualHosts: ingress_https,
-			}),
-		},
+			},
+		),
 		TypeUrl: routeType,
 		Nonce:   versioninfo,
 	}, streamRDS(t, cc))

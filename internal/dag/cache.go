@@ -11,19 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package dag provides a data model, in the form of a directed acyclic graph,
-// of the relationship between Kubernetes Ingress, Service, and Secret objects.
 package dag
 
 import (
-	"sync"
-
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/api/extensions/v1beta1"
 	"k8s.io/client-go/tools/cache"
 
 	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
 )
+
+const DEFAULT_INGRESS_CLASS = "contour"
 
 // A KubernetesCache holds Kubernetes objects and associated configuration and produces
 // DAG values.
@@ -33,7 +31,9 @@ type KubernetesCache struct {
 	// namespace.
 	IngressRouteRootNamespaces []string
 
-	mu sync.RWMutex
+	// Contour's IngressClass.
+	// If not set, defaults to DEFAULT_INGRESS_CLASS.
+	IngressClass string
 
 	ingresses     map[Meta]*v1beta1.Ingress
 	ingressroutes map[Meta]*ingressroutev1.IngressRoute
@@ -48,10 +48,10 @@ type Meta struct {
 }
 
 // Insert inserts obj into the KubernetesCache.
-// If an object with a matching type, name, and namespace exists, it will be overwritten.
-func (kc *KubernetesCache) Insert(obj interface{}) {
-	kc.mu.Lock()
-	defer kc.mu.Unlock()
+// Insert returns true if the cache accepted the object, or false if the value
+// is not interesting to the cache. If an object with a matching type, name,
+// and namespace exists, it will be overwritten.
+func (kc *KubernetesCache) Insert(obj interface{}) bool {
 	switch obj := obj.(type) {
 	case *v1.Secret:
 		m := Meta{name: obj.Name, namespace: obj.Namespace}
@@ -59,67 +59,210 @@ func (kc *KubernetesCache) Insert(obj interface{}) {
 			kc.secrets = make(map[Meta]*v1.Secret)
 		}
 		kc.secrets[m] = obj
+		return kc.secretTriggersRebuild(obj)
 	case *v1.Service:
 		m := Meta{name: obj.Name, namespace: obj.Namespace}
 		if kc.services == nil {
 			kc.services = make(map[Meta]*v1.Service)
 		}
 		kc.services[m] = obj
+		return kc.serviceTriggersRebuild(obj)
 	case *v1beta1.Ingress:
+		class := getIngressClassAnnotation(obj.Annotations)
+		if class != "" && class != kc.ingressClass() {
+			return false
+		}
 		m := Meta{name: obj.Name, namespace: obj.Namespace}
 		if kc.ingresses == nil {
 			kc.ingresses = make(map[Meta]*v1beta1.Ingress)
 		}
 		kc.ingresses[m] = obj
+		return true
 	case *ingressroutev1.IngressRoute:
+		class := getIngressClassAnnotation(obj.Annotations)
+		if class != "" && class != kc.ingressClass() {
+			return false
+		}
 		m := Meta{name: obj.Name, namespace: obj.Namespace}
 		if kc.ingressroutes == nil {
 			kc.ingressroutes = make(map[Meta]*ingressroutev1.IngressRoute)
 		}
 		kc.ingressroutes[m] = obj
+		return true
 	case *ingressroutev1.TLSCertificateDelegation:
 		m := Meta{name: obj.Name, namespace: obj.Namespace}
 		if kc.delegations == nil {
 			kc.delegations = make(map[Meta]*ingressroutev1.TLSCertificateDelegation)
 		}
 		kc.delegations[m] = obj
-
+		return true
 	default:
 		// not an interesting object
+		return false
 	}
+}
+
+// ingressClass returns the IngressClass
+// or DEFAULT_INGRESS_CLASS if not configured.
+func (kc *KubernetesCache) ingressClass() string {
+	return stringOrDefault(kc.IngressClass, DEFAULT_INGRESS_CLASS)
 }
 
 // Remove removes obj from the KubernetesCache.
-// If no object with a matching type, name, and namespace exists in the DAG, no action is taken.
-func (kc *KubernetesCache) Remove(obj interface{}) {
+// Remove returns a boolean indiciating if the cache changed after the remove operation.
+func (kc *KubernetesCache) Remove(obj interface{}) bool {
 	switch obj := obj.(type) {
 	default:
-		kc.remove(obj)
+		return kc.remove(obj)
 	case cache.DeletedFinalStateUnknown:
-		kc.Remove(obj.Obj) // recurse into ourselves with the tombstoned value
+		return kc.Remove(obj.Obj) // recurse into ourselves with the tombstoned value
 	}
 }
 
-func (kc *KubernetesCache) remove(obj interface{}) {
-	kc.mu.Lock()
-	defer kc.mu.Unlock()
+func (kc *KubernetesCache) remove(obj interface{}) bool {
 	switch obj := obj.(type) {
 	case *v1.Secret:
 		m := Meta{name: obj.Name, namespace: obj.Namespace}
+		_, ok := kc.secrets[m]
 		delete(kc.secrets, m)
+		return ok
 	case *v1.Service:
 		m := Meta{name: obj.Name, namespace: obj.Namespace}
+		_, ok := kc.services[m]
 		delete(kc.services, m)
+		return ok
 	case *v1beta1.Ingress:
 		m := Meta{name: obj.Name, namespace: obj.Namespace}
+		_, ok := kc.ingresses[m]
 		delete(kc.ingresses, m)
+		return ok
 	case *ingressroutev1.IngressRoute:
 		m := Meta{name: obj.Name, namespace: obj.Namespace}
+		_, ok := kc.ingressroutes[m]
 		delete(kc.ingressroutes, m)
+		return ok
 	case *ingressroutev1.TLSCertificateDelegation:
 		m := Meta{name: obj.Name, namespace: obj.Namespace}
+		_, ok := kc.delegations[m]
 		delete(kc.delegations, m)
+		return ok
 	default:
 		// not interesting
+		return false
 	}
+}
+
+// serviceTriggersRebuild returns true if this service is referenced
+// by an Ingress or IngressRoute in this cache.
+func (kc *KubernetesCache) serviceTriggersRebuild(service *v1.Service) bool {
+	for _, ingress := range kc.ingresses {
+		if ingress.Namespace != service.Namespace {
+			continue
+		}
+		if backend := ingress.Spec.Backend; backend != nil {
+			if backend.ServiceName == service.Name {
+				return true
+			}
+		}
+
+		for _, rule := range ingress.Spec.Rules {
+			http := rule.IngressRuleValue.HTTP
+			if http == nil {
+				continue
+			}
+			for _, path := range http.Paths {
+				if path.Backend.ServiceName == service.Name {
+					return true
+				}
+			}
+		}
+	}
+
+	for _, ir := range kc.ingressroutes {
+		if ir.Namespace != service.Namespace {
+			continue
+		}
+		for _, route := range ir.Spec.Routes {
+			for _, s := range route.Services {
+				if s.Name == service.Name {
+					return true
+				}
+			}
+		}
+		if tcpproxy := ir.Spec.TCPProxy; tcpproxy != nil {
+			for _, s := range tcpproxy.Services {
+				if s.Name == service.Name {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// secretTriggersRebuild returns true if this secret is referenced by an Ingress
+// or IngressRoute object in this cache. If the secret is not in the same namespace
+// it must be mentioned by a TLSCertificateDelegation.
+func (kc *KubernetesCache) secretTriggersRebuild(secret *v1.Secret) bool {
+	delegations := make(map[string]bool) // targetnamespace/secretname to bool
+	for _, d := range kc.delegations {
+		for _, cd := range d.Spec.Delegations {
+			for _, n := range cd.TargetNamespaces {
+				delegations[n+"/"+cd.SecretName] = true
+			}
+		}
+	}
+
+	for _, ingress := range kc.ingresses {
+		if ingress.Namespace == secret.Namespace {
+			for _, tls := range ingress.Spec.TLS {
+				if tls.SecretName == secret.Name {
+					return true
+				}
+			}
+		}
+		if delegations[ingress.Namespace+"/"+secret.Name] {
+			for _, tls := range ingress.Spec.TLS {
+				if tls.SecretName == secret.Namespace+"/"+secret.Name {
+					return true
+				}
+			}
+		}
+
+		if delegations["*/"+secret.Name] {
+			for _, tls := range ingress.Spec.TLS {
+				if tls.SecretName == secret.Namespace+"/"+secret.Name {
+					return true
+				}
+			}
+		}
+	}
+
+	for _, ir := range kc.ingressroutes {
+		vh := ir.Spec.VirtualHost
+		if vh == nil {
+			// not a root ingress
+			continue
+		}
+		tls := vh.TLS
+		if tls == nil {
+			// no tls spec
+			continue
+		}
+
+		if ir.Namespace == secret.Namespace && tls.SecretName == secret.Name {
+			return true
+		}
+		if delegations[ir.Namespace+"/"+secret.Name] {
+			if tls.SecretName == secret.Namespace+"/"+secret.Name {
+				return true
+			}
+		}
+		if delegations["*/"+secret.Name] {
+			if tls.SecretName == secret.Namespace+"/"+secret.Name {
+				return true
+			}
+		}
+	}
+	return false
 }

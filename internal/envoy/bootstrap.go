@@ -23,7 +23,6 @@ import (
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/auth"
 	clusterv2 "github.com/envoyproxy/go-control-plane/envoy/api/v2/cluster"
 	"github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
-	"github.com/envoyproxy/go-control-plane/envoy/api/v2/endpoint"
 	bootstrap "github.com/envoyproxy/go-control-plane/envoy/config/bootstrap/v2"
 )
 
@@ -37,17 +36,15 @@ func Bootstrap(c *BootstrapConfig) *bootstrap.Bootstrap {
 		StaticResources: &bootstrap.Bootstrap_StaticResources{
 			Clusters: []api.Cluster{{
 				Name:                 "contour",
-				AltStatName:          strings.Join([]string{c.Namespace, "contour", strconv.Itoa(intOrDefault(c.XDSGRPCPort, 8001))}, "_"),
+				AltStatName:          strings.Join([]string{c.Namespace, "contour", strconv.Itoa(c.xdsGRPCPort())}, "_"),
 				ConnectTimeout:       5 * time.Second,
 				ClusterDiscoveryType: ClusterDiscoveryType(api.Cluster_STRICT_DNS),
 				LbPolicy:             api.Cluster_ROUND_ROBIN,
 				LoadAssignment: &api.ClusterLoadAssignment{
 					ClusterName: "contour",
-					Endpoints: []endpoint.LocalityLbEndpoints{{
-						LbEndpoints: []endpoint.LbEndpoint{
-							LBEndpoint(stringOrDefault(c.XDSAddress, "127.0.0.1"), intOrDefault(c.XDSGRPCPort, 8001)),
-						},
-					}},
+					Endpoints: Endpoints(
+						SocketAddress(c.xdsAddress(), c.xdsGRPCPort()),
+					),
 				},
 				Http2ProtocolOptions: new(core.Http2ProtocolOptions), // enables http2
 				CircuitBreakers: &clusterv2.CircuitBreakers{
@@ -67,23 +64,21 @@ func Bootstrap(c *BootstrapConfig) *bootstrap.Bootstrap {
 				},
 			}, {
 				Name:                 "service-stats",
-				AltStatName:          strings.Join([]string{c.Namespace, "service-stats", strconv.Itoa(intOrDefault(c.AdminPort, 9001))}, "_"),
+				AltStatName:          strings.Join([]string{c.Namespace, "service-stats", strconv.Itoa(c.adminPort())}, "_"),
 				ConnectTimeout:       250 * time.Millisecond,
 				ClusterDiscoveryType: ClusterDiscoveryType(api.Cluster_LOGICAL_DNS),
 				LbPolicy:             api.Cluster_ROUND_ROBIN,
 				LoadAssignment: &api.ClusterLoadAssignment{
 					ClusterName: "service-stats",
-					Endpoints: []endpoint.LocalityLbEndpoints{{
-						LbEndpoints: []endpoint.LbEndpoint{
-							LBEndpoint(stringOrDefault(c.AdminAddress, "127.0.0.1"), intOrDefault(c.AdminPort, 9001)),
-						},
-					}},
+					Endpoints: Endpoints(
+						SocketAddress(c.adminAddress(), c.adminPort()),
+					),
 				},
 			}},
 		},
 		Admin: &bootstrap.Admin{
-			AccessLogPath: stringOrDefault(c.AdminAccessLogPath, "/dev/null"),
-			Address:       SocketAddress(stringOrDefault(c.AdminAddress, "127.0.0.1"), intOrDefault(c.AdminPort, 9001)),
+			AccessLogPath: c.adminAccessLogPath(),
+			Address:       SocketAddress(c.adminAddress(), c.adminPort()),
 		},
 	}
 
@@ -99,36 +94,20 @@ func Bootstrap(c *BootstrapConfig) *bootstrap.Bootstrap {
 }
 
 func upstreamFileTLSContext(cafile, certfile, keyfile string) *auth.UpstreamTlsContext {
-	if certfile == "" {
-		// Nothig to do
-		return nil
-	}
-
-	if certfile == "" {
-		// Nothing to do
-		return nil
-	}
-
-	if cafile == "" {
-		// You currently must supply a CA file, not just use others.
-		return nil
-	}
 	context := &auth.UpstreamTlsContext{
 		CommonTlsContext: &auth.CommonTlsContext{
-			TlsCertificates: []*auth.TlsCertificate{
-				{
-					CertificateChain: &core.DataSource{
-						Specifier: &core.DataSource_Filename{
-							Filename: certfile,
-						},
-					},
-					PrivateKey: &core.DataSource{
-						Specifier: &core.DataSource_Filename{
-							Filename: keyfile,
-						},
+			TlsCertificates: []*auth.TlsCertificate{{
+				CertificateChain: &core.DataSource{
+					Specifier: &core.DataSource_Filename{
+						Filename: certfile,
 					},
 				},
-			},
+				PrivateKey: &core.DataSource{
+					Specifier: &core.DataSource_Filename{
+						Filename: keyfile,
+					},
+				},
+			}},
 			ValidationContextType: &auth.CommonTlsContext_ValidationContext{
 				ValidationContext: &auth.CertificateValidationContext{
 					TrustedCa: &core.DataSource{
@@ -142,22 +121,7 @@ func upstreamFileTLSContext(cafile, certfile, keyfile string) *auth.UpstreamTlsC
 			},
 		},
 	}
-
 	return context
-}
-
-func stringOrDefault(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
-}
-
-func intOrDefault(i, def int) int {
-	if i == 0 {
-		return def
-	}
-	return i
 }
 
 // BootstrapConfig holds configuration values for a v2.Bootstrap.
@@ -195,4 +159,26 @@ type BootstrapConfig struct {
 
 	// GrpcClientKey is the filename that contains a client key for secure gRPC with TLS.
 	GrpcClientKey string
+}
+
+func (c *BootstrapConfig) xdsAddress() string   { return stringOrDefault(c.XDSAddress, "127.0.0.1") }
+func (c *BootstrapConfig) xdsGRPCPort() int     { return intOrDefault(c.XDSGRPCPort, 8001) }
+func (c *BootstrapConfig) adminAddress() string { return stringOrDefault(c.AdminAddress, "127.0.0.1") }
+func (c *BootstrapConfig) adminPort() int       { return intOrDefault(c.AdminPort, 9001) }
+func (c *BootstrapConfig) adminAccessLogPath() string {
+	return stringOrDefault(c.AdminAccessLogPath, "/dev/null")
+}
+
+func stringOrDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
+func intOrDefault(i, def int) int {
+	if i == 0 {
+		return def
+	}
+	return i
 }

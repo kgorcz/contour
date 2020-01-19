@@ -22,10 +22,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/go-cmp/cmp"
 	ingressroutev1 "github.com/heptio/contour/apis/contour/v1beta1"
-	"github.com/heptio/contour/internal/dag"
 	"github.com/heptio/contour/internal/envoy"
-	"github.com/heptio/contour/internal/metrics"
-	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/api/extensions/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,13 +42,13 @@ func TestListenerCacheContents(t *testing.T) {
 			contents: listenermap(&v2.Listener{
 				Name:         ENVOY_HTTP_LISTENER,
 				Address:      *envoy.SocketAddress("0.0.0.0", 8080),
-				FilterChains: filterchain(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+				FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
 			}),
 			want: []proto.Message{
 				&v2.Listener{
 					Name:         ENVOY_HTTP_LISTENER,
 					Address:      *envoy.SocketAddress("0.0.0.0", 8080),
-					FilterChains: filterchain(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+					FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
 				},
 			},
 		},
@@ -79,14 +76,14 @@ func TestListenerCacheQuery(t *testing.T) {
 			contents: listenermap(&v2.Listener{
 				Name:         ENVOY_HTTP_LISTENER,
 				Address:      *envoy.SocketAddress("0.0.0.0", 8080),
-				FilterChains: filterchain(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+				FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
 			}),
 			query: []string{ENVOY_HTTP_LISTENER},
 			want: []proto.Message{
 				&v2.Listener{
 					Name:         ENVOY_HTTP_LISTENER,
 					Address:      *envoy.SocketAddress("0.0.0.0", 8080),
-					FilterChains: filterchain(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+					FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
 				},
 			},
 		},
@@ -94,14 +91,14 @@ func TestListenerCacheQuery(t *testing.T) {
 			contents: listenermap(&v2.Listener{
 				Name:         ENVOY_HTTP_LISTENER,
 				Address:      *envoy.SocketAddress("0.0.0.0", 8080),
-				FilterChains: filterchain(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+				FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
 			}),
 			query: []string{ENVOY_HTTP_LISTENER, "stats-listener"},
 			want: []proto.Message{
 				&v2.Listener{
 					Name:         ENVOY_HTTP_LISTENER,
 					Address:      *envoy.SocketAddress("0.0.0.0", 8080),
-					FilterChains: filterchain(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+					FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
 				},
 			},
 		},
@@ -109,7 +106,7 @@ func TestListenerCacheQuery(t *testing.T) {
 			contents: listenermap(&v2.Listener{
 				Name:         ENVOY_HTTP_LISTENER,
 				Address:      *envoy.SocketAddress("0.0.0.0", 8080),
-				FilterChains: filterchain(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+				FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
 			}),
 			query: []string{"stats-listener"},
 			want:  nil,
@@ -152,11 +149,24 @@ func TestListenerVisit(t *testing.T) {
 						},
 					},
 				},
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Name:     "http",
+							Protocol: "TCP",
+							Port:     8080,
+						}},
+					},
+				},
 			},
 			want: listenermap(&v2.Listener{
 				Name:         ENVOY_HTTP_LISTENER,
 				Address:      *envoy.SocketAddress("0.0.0.0", 8080),
-				FilterChains: filterchain(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+				FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
 			}),
 		},
 		"one http only ingressroute": {
@@ -199,7 +209,7 @@ func TestListenerVisit(t *testing.T) {
 			want: listenermap(&v2.Listener{
 				Name:         ENVOY_HTTP_LISTENER,
 				Address:      *envoy.SocketAddress("0.0.0.0", 8080),
-				FilterChains: filterchain(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+				FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
 			}),
 		},
 		"simple ingress with secret": {
@@ -228,11 +238,24 @@ func TestListenerVisit(t *testing.T) {
 					Type: "kubernetes.io/tls",
 					Data: secretdata("certificate", "key"),
 				},
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Name:     "http",
+							Protocol: "TCP",
+							Port:     8080,
+						}},
+					},
+				},
 			},
 			want: listenermap(&v2.Listener{
 				Name:         ENVOY_HTTP_LISTENER,
 				Address:      *envoy.SocketAddress("0.0.0.0", 8080),
-				FilterChains: filterchain(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+				FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
 			}, &v2.Listener{
 				Name:    ENVOY_HTTPS_LISTENER,
 				Address: *envoy.SocketAddress("0.0.0.0", 8443),
@@ -244,7 +267,7 @@ func TestListenerVisit(t *testing.T) {
 						ServerNames: []string{"whatever.example.com"},
 					},
 					TlsContext: tlscontext(auth.TlsParameters_TLSv1_1, "h2", "http/1.1"),
-					Filters:    filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, DEFAULT_HTTPS_ACCESS_LOG)),
+					Filters:    envoy.Filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, DEFAULT_HTTPS_ACCESS_LOG)),
 				}},
 			}),
 		},
@@ -290,11 +313,24 @@ func TestListenerVisit(t *testing.T) {
 					Type: "kubernetes.io/tls",
 					Data: secretdata("certificate", "key"),
 				},
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Name:     "http",
+							Protocol: "TCP",
+							Port:     8080,
+						}},
+					},
+				},
 			},
 			want: listenermap(&v2.Listener{
 				Name:         ENVOY_HTTP_LISTENER,
 				Address:      *envoy.SocketAddress("0.0.0.0", 8080),
-				FilterChains: filterchain(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+				FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
 			}, &v2.Listener{
 				Name:    ENVOY_HTTPS_LISTENER,
 				Address: *envoy.SocketAddress("0.0.0.0", 8443),
@@ -307,14 +343,14 @@ func TestListenerVisit(t *testing.T) {
 							ServerNames: []string{"sortedfirst.example.com"},
 						},
 						TlsContext: tlscontext(auth.TlsParameters_TLSv1_1, "h2", "http/1.1"),
-						Filters:    filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, DEFAULT_HTTPS_ACCESS_LOG)),
+						Filters:    envoy.Filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, DEFAULT_HTTPS_ACCESS_LOG)),
 					},
 					{
 						FilterChainMatch: &listener.FilterChainMatch{
 							ServerNames: []string{"sortedsecond.example.com"},
 						},
 						TlsContext: tlscontext(auth.TlsParameters_TLSv1_1, "h2", "http/1.1"),
-						Filters:    filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, DEFAULT_HTTPS_ACCESS_LOG)),
+						Filters:    envoy.Filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, DEFAULT_HTTPS_ACCESS_LOG)),
 					},
 				},
 			}),
@@ -345,11 +381,24 @@ func TestListenerVisit(t *testing.T) {
 					Type: "kubernetes.io/tls",
 					Data: secretdata("certificate", "key"),
 				},
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Name:     "http",
+							Protocol: "TCP",
+							Port:     8080,
+						}},
+					},
+				},
 			},
 			want: listenermap(&v2.Listener{
 				Name:         ENVOY_HTTP_LISTENER,
 				Address:      *envoy.SocketAddress("0.0.0.0", 8080),
-				FilterChains: filterchain(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+				FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
 			}),
 		},
 		"simple ingressroute with secret": {
@@ -403,7 +452,7 @@ func TestListenerVisit(t *testing.T) {
 			want: listenermap(&v2.Listener{
 				Name:         ENVOY_HTTP_LISTENER,
 				Address:      *envoy.SocketAddress("0.0.0.0", 8080),
-				FilterChains: filterchain(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+				FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
 			}, &v2.Listener{
 				Name:    ENVOY_HTTPS_LISTENER,
 				Address: *envoy.SocketAddress("0.0.0.0", 8443),
@@ -412,7 +461,7 @@ func TestListenerVisit(t *testing.T) {
 						ServerNames: []string{"www.example.com"},
 					},
 					TlsContext: tlscontext(auth.TlsParameters_TLSv1_1, "h2", "http/1.1"),
-					Filters:    filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, DEFAULT_HTTPS_ACCESS_LOG)),
+					Filters:    envoy.Filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, DEFAULT_HTTPS_ACCESS_LOG)),
 				}},
 				ListenerFilters: []listener.ListenerFilter{
 					envoy.TLSInspector(),
@@ -477,7 +526,7 @@ func TestListenerVisit(t *testing.T) {
 						ServerNames: []string{"www.example.com"},
 					},
 					TlsContext: tlscontext(auth.TlsParameters_TLSv1_1, "h2", "http/1.1"),
-					Filters:    filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, DEFAULT_HTTPS_ACCESS_LOG)),
+					Filters:    envoy.Filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, DEFAULT_HTTPS_ACCESS_LOG)),
 				}},
 				ListenerFilters: []listener.ListenerFilter{
 					envoy.TLSInspector(),
@@ -516,11 +565,24 @@ func TestListenerVisit(t *testing.T) {
 					Type: "kubernetes.io/tls",
 					Data: secretdata("certificate", "key"),
 				},
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Name:     "http",
+							Protocol: "TCP",
+							Port:     8080,
+						}},
+					},
+				},
 			},
 			want: listenermap(&v2.Listener{
 				Name:         ENVOY_HTTP_LISTENER,
 				Address:      *envoy.SocketAddress("127.0.0.100", 9100),
-				FilterChains: filterchain(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+				FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
 			}, &v2.Listener{
 				Name:    ENVOY_HTTPS_LISTENER,
 				Address: *envoy.SocketAddress("127.0.0.200", 9200),
@@ -532,7 +594,7 @@ func TestListenerVisit(t *testing.T) {
 						ServerNames: []string{"whatever.example.com"},
 					},
 					TlsContext: tlscontext(auth.TlsParameters_TLSv1_1, "h2", "http/1.1"),
-					Filters:    filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, DEFAULT_HTTPS_ACCESS_LOG)),
+					Filters:    envoy.Filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, DEFAULT_HTTPS_ACCESS_LOG)),
 				}},
 			}),
 		},
@@ -565,6 +627,19 @@ func TestListenerVisit(t *testing.T) {
 					Type: "kubernetes.io/tls",
 					Data: secretdata("certificate", "key"),
 				},
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Name:     "http",
+							Protocol: "TCP",
+							Port:     8080,
+						}},
+					},
+				},
 			},
 			want: listenermap(&v2.Listener{
 				Name:    ENVOY_HTTP_LISTENER,
@@ -572,7 +647,7 @@ func TestListenerVisit(t *testing.T) {
 				ListenerFilters: []listener.ListenerFilter{
 					envoy.ProxyProtocol(),
 				},
-				FilterChains: filterchain(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+				FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
 			}, &v2.Listener{
 				Name:    ENVOY_HTTPS_LISTENER,
 				Address: *envoy.SocketAddress("0.0.0.0", 8443),
@@ -585,7 +660,7 @@ func TestListenerVisit(t *testing.T) {
 						ServerNames: []string{"whatever.example.com"},
 					},
 					TlsContext: tlscontext(auth.TlsParameters_TLSv1_1, "h2", "http/1.1"),
-					Filters:    filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, DEFAULT_HTTPS_ACCESS_LOG)),
+					Filters:    envoy.Filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, DEFAULT_HTTPS_ACCESS_LOG)),
 				}},
 			}),
 		},
@@ -619,11 +694,24 @@ func TestListenerVisit(t *testing.T) {
 					Type: "kubernetes.io/tls",
 					Data: secretdata("certificate", "key"),
 				},
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Name:     "http",
+							Protocol: "TCP",
+							Port:     8080,
+						}},
+					},
+				},
 			},
 			want: listenermap(&v2.Listener{
 				Name:         ENVOY_HTTP_LISTENER,
 				Address:      *envoy.SocketAddress(DEFAULT_HTTP_LISTENER_ADDRESS, DEFAULT_HTTP_LISTENER_PORT),
-				FilterChains: filterchain(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, "/tmp/http_access.log")),
+				FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, "/tmp/http_access.log")),
 			}, &v2.Listener{
 				Name:    ENVOY_HTTPS_LISTENER,
 				Address: *envoy.SocketAddress(DEFAULT_HTTPS_LISTENER_ADDRESS, DEFAULT_HTTPS_LISTENER_PORT),
@@ -635,40 +723,219 @@ func TestListenerVisit(t *testing.T) {
 						ServerNames: []string{"whatever.example.com"},
 					},
 					TlsContext: tlscontext(auth.TlsParameters_TLSv1_1, "h2", "http/1.1"),
-					Filters:    filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, "/tmp/https_access.log")),
+					Filters:    envoy.Filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, "/tmp/https_access.log")),
 				}},
+			}),
+		},
+		"tls-min-protocol-version from config": {
+			ListenerVisitorConfig: ListenerVisitorConfig{
+				MinimumProtocolVersion: auth.TlsParameters_TLSv1_3,
+			},
+			objs: []interface{}{
+				&v1beta1.Ingress{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "simple",
+						Namespace: "default",
+					},
+					Spec: v1beta1.IngressSpec{
+						TLS: []v1beta1.IngressTLS{{
+							Hosts:      []string{"whatever.example.com"},
+							SecretName: "secret",
+						}},
+						Backend: &v1beta1.IngressBackend{
+							ServiceName: "kuard",
+							ServicePort: intstr.FromInt(8080),
+						},
+					},
+				},
+				&v1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "secret",
+						Namespace: "default",
+					},
+					Type: "kubernetes.io/tls",
+					Data: secretdata("certificate", "key"),
+				},
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Name:     "http",
+							Protocol: "TCP",
+							Port:     8080,
+						}},
+					},
+				},
+			},
+			want: listenermap(&v2.Listener{
+				Name:         ENVOY_HTTP_LISTENER,
+				Address:      *envoy.SocketAddress("0.0.0.0", 8080),
+				FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+			}, &v2.Listener{
+				Name:    ENVOY_HTTPS_LISTENER,
+				Address: *envoy.SocketAddress("0.0.0.0", 8443),
+				FilterChains: []listener.FilterChain{{
+					FilterChainMatch: &listener.FilterChainMatch{
+						ServerNames: []string{"whatever.example.com"},
+					},
+					TlsContext: tlscontext(auth.TlsParameters_TLSv1_3, "h2", "http/1.1"),
+					Filters:    envoy.Filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, DEFAULT_HTTPS_ACCESS_LOG)),
+				}},
+				ListenerFilters: []listener.ListenerFilter{
+					envoy.TLSInspector(),
+				},
+			}),
+		},
+		"tls-min-protocol-version from config overridden by annotation": {
+			ListenerVisitorConfig: ListenerVisitorConfig{
+				MinimumProtocolVersion: auth.TlsParameters_TLSv1_3,
+			},
+			objs: []interface{}{
+				&v1beta1.Ingress{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "simple",
+						Namespace: "default",
+						Annotations: map[string]string{
+							"contour.heptio.com/tls-minimum-protocol-version": "1.2",
+						},
+					},
+					Spec: v1beta1.IngressSpec{
+						TLS: []v1beta1.IngressTLS{{
+							Hosts:      []string{"whatever.example.com"},
+							SecretName: "secret",
+						}},
+						Backend: &v1beta1.IngressBackend{
+							ServiceName: "kuard",
+							ServicePort: intstr.FromInt(8080),
+						},
+					},
+				},
+				&v1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "secret",
+						Namespace: "default",
+					},
+					Type: "kubernetes.io/tls",
+					Data: secretdata("certificate", "key"),
+				},
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kuard",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Name:     "http",
+							Protocol: "TCP",
+							Port:     8080,
+						}},
+					},
+				},
+			},
+			want: listenermap(&v2.Listener{
+				Name:         ENVOY_HTTP_LISTENER,
+				Address:      *envoy.SocketAddress("0.0.0.0", 8080),
+				FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+			}, &v2.Listener{
+				Name:    ENVOY_HTTPS_LISTENER,
+				Address: *envoy.SocketAddress("0.0.0.0", 8443),
+				FilterChains: []listener.FilterChain{{
+					FilterChainMatch: &listener.FilterChainMatch{
+						ServerNames: []string{"whatever.example.com"},
+					},
+					TlsContext: tlscontext(auth.TlsParameters_TLSv1_3, "h2", "http/1.1"), // note, cannot downgrade from the configured version
+					Filters:    envoy.Filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, DEFAULT_HTTPS_ACCESS_LOG)),
+				}},
+				ListenerFilters: []listener.ListenerFilter{
+					envoy.TLSInspector(),
+				},
+			}),
+		},
+		"tls-min-protocol-version from config overridden by ingressroute": {
+			ListenerVisitorConfig: ListenerVisitorConfig{
+				MinimumProtocolVersion: auth.TlsParameters_TLSv1_3,
+			},
+			objs: []interface{}{
+				&ingressroutev1.IngressRoute{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "simple",
+						Namespace: "default",
+					},
+					Spec: ingressroutev1.IngressRouteSpec{
+						VirtualHost: &ingressroutev1.VirtualHost{
+							Fqdn: "www.example.com",
+							TLS: &ingressroutev1.TLS{
+								SecretName:             "secret",
+								MinimumProtocolVersion: "1.2",
+							},
+						},
+						Routes: []ingressroutev1.Route{
+							{
+								Services: []ingressroutev1.Service{
+									{
+										Name: "backend",
+										Port: 80,
+									},
+								},
+							},
+						},
+					},
+				},
+				&v1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "secret",
+						Namespace: "default",
+					},
+					Type: "kubernetes.io/tls",
+					Data: secretdata("certificate", "key"),
+				},
+				&v1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "backend",
+						Namespace: "default",
+					},
+					Spec: v1.ServiceSpec{
+						Ports: []v1.ServicePort{{
+							Name:     "http",
+							Protocol: "TCP",
+							Port:     80,
+						}},
+					},
+				},
+			},
+			want: listenermap(&v2.Listener{
+				Name:         ENVOY_HTTP_LISTENER,
+				Address:      *envoy.SocketAddress("0.0.0.0", 8080),
+				FilterChains: envoy.FilterChains(envoy.HTTPConnectionManager(ENVOY_HTTP_LISTENER, DEFAULT_HTTP_ACCESS_LOG)),
+			}, &v2.Listener{
+				Name:    ENVOY_HTTPS_LISTENER,
+				Address: *envoy.SocketAddress("0.0.0.0", 8443),
+				FilterChains: []listener.FilterChain{{
+					FilterChainMatch: &listener.FilterChainMatch{
+						ServerNames: []string{"www.example.com"},
+					},
+					TlsContext: tlscontext(auth.TlsParameters_TLSv1_3, "h2", "http/1.1"), // note, cannot downgrade from the configured version
+					Filters:    envoy.Filters(envoy.HTTPConnectionManager(ENVOY_HTTPS_LISTENER, DEFAULT_HTTPS_ACCESS_LOG)),
+				}},
+				ListenerFilters: []listener.ListenerFilter{
+					envoy.TLSInspector(),
+				},
 			}),
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			reh := ResourceEventHandler{
-				FieldLogger: testLogger(t),
-				Notifier:    new(nullNotifier),
-				Metrics:     metrics.NewMetrics(prometheus.NewRegistry()),
-			}
-			for _, o := range tc.objs {
-				reh.OnAdd(o)
-			}
-			root := dag.BuildDAG(&reh.KubernetesCache)
+			root := buildDAG(tc.objs...)
 			got := visitListeners(root, &tc.ListenerVisitorConfig)
 			if !cmp.Equal(tc.want, got) {
 				t.Fatalf("expected:\n%+v\ngot:\n%+v", tc.want, got)
 			}
 		})
 	}
-}
-
-func filters(first listener.Filter, rest ...listener.Filter) []listener.Filter {
-	return append([]listener.Filter{first}, rest...)
-}
-
-func filterchain(filters ...listener.Filter) []listener.FilterChain {
-	fc := listener.FilterChain{
-		Filters: filters,
-	}
-	return []listener.FilterChain{fc}
 }
 
 func tlscontext(tlsMinProtoVersion auth.TlsParameters_TlsProtocol, alpnprotos ...string) *auth.DownstreamTlsContext {

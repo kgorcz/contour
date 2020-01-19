@@ -4,17 +4,25 @@
 
 The outcome of this is that we will have three Secrets available in the `heptio-contour` namespace:
 - cacert: contains the CA's public certificate.
-- contourcerts: contains Contour's keypair, used for serving TLS secured gRPC. This must be a valid certificate for the name `contour` in order for this to work. This is currently hardcoded by Contour.
-- envoycerts: contains Envoy's keypair, used as a client for connecting to Contour.
+- contourcert: contains Contour's keypair, used for serving TLS secured gRPC. This must be a valid certificate for the name `contour` in order for this to work. This is currently hardcoded by Contour.
+- envoycert: contains Envoy's keypair, used as a client for connecting to Contour.
 
-For the purposes of this documentation, we'll be doing the same thing the `contour certgen --pem` or the `make gencerts` commands do and putting the certs in a `certs/` subdirectory of the downloaded repo.
+### Ways you can get the certificates into your cluster
+
+- Deploy the Job from [certgen.yaml](../examples/ds-hostnet-split/02-job-certgen.yaml).
+This will run `contour certgen --kube` for you.
+- Run `contour certgen --kube` locally.
+- Run the manual procedure below.
 
 ## Caveats and warnings
 
-**Don't use this to create your production certificate infrastructure!**
-This is intended as an example to help you get started. For any real deployment, you should **carefullY** manage all the certificates and control who has access to them. Make sure you don't commit them to any git repos either.
+**Be very careful with your production certificates!**
 
-## Generating a CA keypair
+This is intended as an example to help you get started. For any real deployment, you should **carefully** manage all the certificates and control who has access to them. Make sure you don't commit them to any git repos either.
+
+## Manual TLS certificate generation process
+
+### Generating a CA keypair
 
 First, we need to generate a keypair:
 ```
@@ -26,7 +34,7 @@ openssl req -x509 -new -nodes \
 
 Then, the new CA key will be stored in `certs/cakey.pem` and the cert in `certs/cacert.pem`.
 
-## Generating Contour's keypair
+### Generating Contour's keypair
 
 Then, we need to generate a keypair for Contour. First, we make a new private key:
 ```
@@ -50,7 +58,7 @@ openssl x509 -req -in certs/contour.csr \
 
 At this point, the contour cert and key are in the files `certs/contourcert.pem` and `certs/contourkey.pem` respectively.
 
-## Generating Envoy's keypair
+### Generating Envoy's keypair
 
 Next, we generate a keypair for Envoy:
 ```
@@ -73,23 +81,18 @@ openssl x509 -req -in certs/envoy.csr \
 
 Like the contour cert, this CSR uses the file [_integration/cert-envoy.ext](./_integration/cert-envoy.ext). However, in this case, there are no special names required.
 
-## Putting the certs in the cluster
+### Putting the certs in the cluster
 
 Next, we create the required secrets in the target Kubernetes cluster:
 
 ```
 kubectl create secret -n heptio-contour generic cacert --from-file=./certs/cacert.pem
 kubectl create secret -n heptio-contour tls contourcert --key=./certs/contourkey.pem --cert=./certs/contourcert.pem
-kubectl create secret -n heptio-contour generic envoycert --key=./certs/envoykey.pem --cert=./certs/envoycert.pem
+kubectl create secret -n heptio-contour tls envoycert --key=./certs/envoykey.pem --cert=./certs/envoycert.pem
 ```
 
 Note that we don't put the CA **key** into the cluster, there's no reason for that to be there, and that would create a security problem. That also means that the `cacert` secret can't be a `tls` type secret, as they must be a keypair.
 
 # Conclusion
 
-Once this process is done, doing a 
-```
-kubectl apply -f examples/ds-hostnet-split/
-```
-
-Will successfully apply the pods. Otherwise, the pods will not be able to be created, since the required Secrets will not be present.
+Once this process is done, the certificates will be present as Secrets in the `heptio-contour` namespace, as required by `examples/ds-hostnet-split`.

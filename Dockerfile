@@ -1,6 +1,7 @@
-FROM golang:1.12.8 AS build
+FROM golang:1.12.9 AS build
 WORKDIR /contour
 
+ENV GOPROXY=https://proxy.golang.org
 COPY go.mod ./
 RUN go mod download
 

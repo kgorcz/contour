@@ -5,11 +5,13 @@ go:
 
 sudo: false
 
-env:
-  - GOPROXY=https://gocenter.io
+cache:
+  directories:
+  - /home/travis/.cache/go-build
+  - /home/travis/gopath/pkg/mod
 
-install:
-  - make download
+env:
+  - GOPROXY=https://proxy.golang.org/
 
 script:
   - make check

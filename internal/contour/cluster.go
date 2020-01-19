@@ -57,13 +57,8 @@ func (c *ClusterCache) Update(v map[string]*v2.Cluster) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.values = v
-	c.notify()
-}
-
-// notify notifies all registered waiters that an event has occurred.
-func (c *ClusterCache) notify() {
 	c.last++
+	c.values = v
 
 	for _, ch := range c.waiters {
 		ch <- c.last
@@ -125,13 +120,7 @@ func visitClusters(root dag.Vertex) map[string]*v2.Cluster {
 func (v *clusterVisitor) visit(vertex dag.Vertex) {
 	if cluster, ok := vertex.(*dag.Cluster); ok {
 		switch cluster.Upstream.(type) {
-		case *dag.HTTPService:
-			name := envoy.Clustername(cluster)
-			if _, ok := v.clusters[name]; !ok {
-				c := envoy.Cluster(cluster)
-				v.clusters[c.Name] = c
-			}
-		case *dag.TCPService:
+		case *dag.HTTPService, *dag.TCPService:
 			name := envoy.Clustername(cluster)
 			if _, ok := v.clusters[name]; !ok {
 				c := envoy.Cluster(cluster)
