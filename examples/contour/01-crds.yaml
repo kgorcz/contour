@@ -297,6 +297,9 @@ spec:
                     ingress tree all leaves of the DAG rooted at this object relate
                     to the fqdn
                   type: string
+                port:
+                  description: Port (defined as Integer) to listen on
+                  type: integer
                 tls:
                   description: If present describes tls properties. The CNI names
                     that will be matched on are described in fqdn, the tls.secretName
@@ -781,6 +784,9 @@ spec:
                     ingress tree all leaves of the DAG rooted at this object relate
                     to the fqdn
                   type: string
+                port:
+                  description: Port (defined as Integer) to listen on
+                  type: integer
                 tls:
                   description: If present describes tls properties. The CNI names
                     that will be matched on are described in fqdn, the tls.secretName
