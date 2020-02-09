@@ -28,7 +28,7 @@ footer_social_links:
     url: https://kubernetes.slack.com/messages/contour
   RSS:
     fa_icon: fa fa-rss
-    url: feed.xml
+    url: /feed.xml
   GitHub:
     fa_icon: fab fa-github
     url: https://github.com/projectcontour/contour
@@ -41,9 +41,29 @@ defaults:
       layout: "posts"
   - scope:
       path: ""
-      type: "pages"
     values:
       layout: "default"
+      toc: "h2, h3" # Default TOC levels, see _includes/footer.html.
+  - scope:
+      path: docs/master
+    values:
+      version: master
+      layout: "docs"
+  - scope:
+      path: docs/v1.1.0
+    values:
+      version: v1.1.0
+      layout: "docs"
+  - scope:
+      path: docs/v1.0.0
+    values:
+      version: v1.0.0
+      layout: "docs"
+  - scope:
+      path: docs/v1.0.1
+    values:
+      version: v1.0.1
+      layout: "docs"
 
 repository: projectcontour/contour
 
@@ -57,16 +77,30 @@ collections:
     permalink: /docs/1.0/:name
   contributors:
     output: false
-  casestudies:
+  features:
     output: false
   metrics:
     output: false
+
+versioning: true
+latest: v1.1.0
+versions:
+  - master
+  - v1.1.0
+  - v1.0.1
+  - v1.0.0
 
 # Build settings
 permalink: :title/
 sass:
   sass_dir: css
   style: :compressed
+
+page_gen:
+  - data: shortlinks
+    template: redirect
+    name: key
+    dir: docs
 
 # Use the following plug-ins
 plugins:
@@ -98,6 +132,12 @@ exclude:
   - Runbook.docx
   - '*.sh'
   - vendor
+  - bundler/bundle/
+  - bundler/cache/
+  - bundler/gems/
+  - bundler/ruby/
+  - node_modules
+
 redcarpet:
     extensions: ["no_intra_emphasis", "tables", "autolink", "strikethrough", "with_toc_data"]
 

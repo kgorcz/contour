@@ -3,7 +3,7 @@ title: Collecting Metrics with Prometheus
 layout: page
 ---
 
-<div id="toc"></div>
+<div id="toc" class="navigation"></div>
 
 Contour and Envoy expose metrics that can be scraped with Prometheus. By
 default, annotations to gather them are in all the `deployment` yamls and they
@@ -37,8 +37,8 @@ A sample deployment of Prometheus and Alertmanager is provided that uses tempora
 
 #### Stateful Deployment
 
- A stateful deployment of Prometheus should use persistent storage with [Persistent Volumes and Persistent Volume Claims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) to maintain a correlation between a data volume and the Prometheus Pod. 
- Persistent volumes can be static or dynamic and depends on the backend storage implementation utilized in environment in which the cluster is deployed. For more information, see the [Kubernetes documentation on types of persistent volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#types-of-persistent-volumes).
+ A stateful deployment of Prometheus should use persistent storage with [Persistent Volumes and Persistent Volume Claims][1] to maintain a correlation between a data volume and the Prometheus Pod.
+ Persistent volumes can be static or dynamic and depends on the backend storage implementation utilized in environment in which the cluster is deployed. For more information, see the [Kubernetes documentation on types of persistent volumes][2].
 
 #### Quick start
 
@@ -53,7 +53,7 @@ $ kubectl apply -f examples/prometheus
 $ kubectl -n projectcontour-monitoring port-forward $(kubectl -n projectcontour-monitoring get pods -l app=prometheus -l component=server -o jsonpath='{.items[0].metadata.name}') 9090:9090
 ```
 
-then go to [http://localhost:9090](http://localhost:9090) in your browser.
+then go to `http://localhost:9090` in your browser.
 
 #### Access the Alertmanager web UI
 
@@ -61,7 +61,7 @@ then go to [http://localhost:9090](http://localhost:9090) in your browser.
 $ kubectl -n projectcontour-monitoring port-forward $(kubectl -n projectcontour-monitoring get pods -l app=prometheus -l component=alertmanager -o jsonpath='{.items[0].metadata.name}') 9093:9093
 ```
 
-then go to [http://localhost:9093](http://localhost:9093) in your browser.
+then go to `http://localhost:9093` in your browser.
 
 ### Deploy Grafana
 
@@ -85,5 +85,8 @@ $ kubectl create secret generic grafana -n projectcontour-monitoring \
 $ kubectl port-forward $(kubectl get pods -l app=grafana -n projectcontour-monitoring -o jsonpath='{.items[0].metadata.name}') 3000 -n projectcontour-monitoring
 ```
 
-then go to [http://localhost:3000](http://localhost:3000) in your browser.
+then go to `http://localhost:3000` in your browser.
 The username and password are from when you defined the Grafana secret in the previous step.
+
+[1]: https://kubernetes.io/docs/concepts/storage/persistent-volumes/
+[2]: https://kubernetes.io/docs/concepts/storage/persistent-volumes/#types-of-persistent-volumes

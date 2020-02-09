@@ -44,7 +44,20 @@ func DefaultCluster(c *v2.Cluster) *v2.Cluster {
 
 	proto.Merge(defaults, c)
 	return defaults
+}
 
+func externalNameCluster(name, servicename, statName, externalName string, port int) *v2.Cluster {
+	return DefaultCluster(&v2.Cluster{
+		Name:                 name,
+		ClusterDiscoveryType: envoy.ClusterDiscoveryType(v2.Cluster_STRICT_DNS),
+		AltStatName:          statName,
+		LoadAssignment: &v2.ClusterLoadAssignment{
+			ClusterName: servicename,
+			Endpoints: envoy.Endpoints(
+				envoy.SocketAddress(externalName, port),
+			),
+		},
+	})
 }
 
 func routeCluster(cluster string) *envoy_api_v2_route.Route_Route {
@@ -54,6 +67,31 @@ func routeCluster(cluster string) *envoy_api_v2_route.Route_Route {
 				Cluster: cluster,
 			},
 		},
+	}
+}
+
+func routePrefix(prefix string, headers ...dag.HeaderCondition) *envoy_api_v2_route.RouteMatch {
+	return envoy.RouteMatch(&dag.Route{
+		PathCondition: &dag.PrefixCondition{
+			Prefix: prefix,
+		},
+		HeaderConditions: headers,
+	})
+}
+
+func routeHostRewrite(cluster, newHostName string) *envoy_api_v2_route.Route_Route {
+	return &envoy_api_v2_route.Route_Route{
+		Route: &envoy_api_v2_route.RouteAction{
+			ClusterSpecifier:     &envoy_api_v2_route.RouteAction_Cluster{Cluster: cluster},
+			HostRewriteSpecifier: &envoy_api_v2_route.RouteAction_HostRewrite{HostRewrite: newHostName},
+		},
+	}
+}
+
+func upgradeHTTPS(match *envoy_api_v2_route.RouteMatch) *envoy_api_v2_route.Route {
+	return &envoy_api_v2_route.Route{
+		Match:  match,
+		Action: envoy.UpgradeHTTPS(),
 	}
 }
 
@@ -69,8 +107,10 @@ func cluster(name, servicename, statName string) *v2.Cluster {
 	})
 }
 
-func tlsCluster(c *v2.Cluster, ca []byte, subjectName string, alpnProtocols ...string) *v2.Cluster {
-	c.TlsContext = envoy.UpstreamTLSContext(ca, subjectName, alpnProtocols...)
+func tlsCluster(c *v2.Cluster, ca []byte, subjectName string, sni string, alpnProtocols ...string) *v2.Cluster {
+	c.TransportSocket = envoy.UpstreamTLSTransportSocket(
+		envoy.UpstreamTLSContext(ca, subjectName, sni, alpnProtocols...),
+	)
 	return c
 }
 
@@ -93,6 +133,11 @@ func withMirrorPolicy(route *envoy_api_v2_route.Route_Route, mirror string) *env
 	route.Route.RequestMirrorPolicy = &envoy_api_v2_route.RouteAction_RequestMirrorPolicy{
 		Cluster: mirror,
 	}
+	return route
+}
+
+func withPrefixRewrite(route *envoy_api_v2_route.Route_Route, replacement string) *envoy_api_v2_route.Route_Route {
+	route.Route.PrefixRewrite = replacement
 	return route
 }
 
@@ -165,9 +210,7 @@ func filterchaintls(domain string, secret *v1.Secret, filter *envoy_api_v2_liste
 		envoy.FilterChainTLS(
 			domain,
 			&dag.Secret{Object: secret},
-			[]*envoy_api_v2_listener.Filter{
-				filter,
-			},
+			envoy.Filters(filter),
 			envoy_api_v2_auth.TlsParameters_TLSv1_1,
 			alpn...,
 		),

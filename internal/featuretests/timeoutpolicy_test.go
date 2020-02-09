@@ -18,6 +18,7 @@ import (
 	"time"
 
 	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
+	envoy_api_v2_route "github.com/envoyproxy/go-control-plane/envoy/api/v2/route"
 	ingressroutev1 "github.com/projectcontour/contour/apis/contour/v1beta1"
 	projcontour "github.com/projectcontour/contour/apis/projectcontour/v1"
 	"github.com/projectcontour/contour/internal/contour"
@@ -68,8 +69,10 @@ func TestTimeoutPolicyRequestTimeout(t *testing.T) {
 		Resources: resources(t,
 			envoy.RouteConfiguration("ingress_http",
 				envoy.VirtualHost("*",
-					envoy.Route(envoy.RoutePrefix("/"),
-						withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 80*time.Second)),
+					&envoy_api_v2_route.Route{
+						Match:  routePrefix("/"),
+						Action: withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 80*time.Second),
+					},
 				),
 			),
 			envoy.RouteConfiguration("ingress_https"),
@@ -94,8 +97,10 @@ func TestTimeoutPolicyRequestTimeout(t *testing.T) {
 		Resources: resources(t,
 			envoy.RouteConfiguration("ingress_http",
 				envoy.VirtualHost("*",
-					envoy.Route(envoy.RoutePrefix("/"),
-						withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 0)), // zero means infinity
+					&envoy_api_v2_route.Route{
+						Match:  routePrefix("/"),
+						Action: withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 0), // zero means infinity
+					},
 				),
 			),
 			envoy.RouteConfiguration("ingress_https"),
@@ -120,8 +125,10 @@ func TestTimeoutPolicyRequestTimeout(t *testing.T) {
 		Resources: resources(t,
 			envoy.RouteConfiguration("ingress_http",
 				envoy.VirtualHost("*",
-					envoy.Route(envoy.RoutePrefix("/"),
-						withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 0)), // zero means infinity
+					&envoy_api_v2_route.Route{
+						Match:  routePrefix("/"),
+						Action: withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 0), // zero means infinity
+					},
 				),
 			),
 			envoy.RouteConfiguration("ingress_https"),
@@ -147,8 +154,10 @@ func TestTimeoutPolicyRequestTimeout(t *testing.T) {
 		Resources: resources(t,
 			envoy.RouteConfiguration("ingress_http",
 				envoy.VirtualHost("*",
-					envoy.Route(envoy.RoutePrefix("/"),
-						withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 99*time.Second)),
+					&envoy_api_v2_route.Route{
+						Match:  routePrefix("/"),
+						Action: withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 99*time.Second),
+					},
 				),
 			),
 			envoy.RouteConfiguration("ingress_https"),
@@ -183,8 +192,10 @@ func TestTimeoutPolicyRequestTimeout(t *testing.T) {
 		Resources: resources(t,
 			envoy.RouteConfiguration("ingress_http",
 				envoy.VirtualHost("test2.test.com",
-					envoy.Route(envoy.RoutePrefix("/"),
-						withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 0)), // zero means infinity
+					&envoy_api_v2_route.Route{
+						Match:  routePrefix("/"),
+						Action: withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 0), // zero means infinity
+					},
 				),
 			),
 			envoy.RouteConfiguration("ingress_https"),
@@ -215,8 +226,10 @@ func TestTimeoutPolicyRequestTimeout(t *testing.T) {
 		Resources: resources(t,
 			envoy.RouteConfiguration("ingress_http",
 				envoy.VirtualHost("test2.test.com",
-					envoy.Route(envoy.RoutePrefix("/"),
-						withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 180*time.Second)),
+					&envoy_api_v2_route.Route{
+						Match:  routePrefix("/"),
+						Action: withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 180*time.Second),
+					},
 				),
 			),
 			envoy.RouteConfiguration("ingress_https"),
@@ -247,8 +260,10 @@ func TestTimeoutPolicyRequestTimeout(t *testing.T) {
 		Resources: resources(t,
 			envoy.RouteConfiguration("ingress_http",
 				envoy.VirtualHost("test2.test.com",
-					envoy.Route(envoy.RoutePrefix("/"),
-						withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 0)), // zero means infinity
+					&envoy_api_v2_route.Route{
+						Match:  routePrefix("/"),
+						Action: withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 0), // zero means infinity
+					},
 				),
 			),
 			envoy.RouteConfiguration("ingress_https"),
@@ -265,7 +280,7 @@ func TestTimeoutPolicyRequestTimeout(t *testing.T) {
 		Spec: projcontour.HTTPProxySpec{
 			VirtualHost: &projcontour.VirtualHost{Fqdn: "test2.test.com"},
 			Routes: []projcontour.Route{{
-				Conditions: prefixCondition("/"),
+				Conditions: conditions(prefixCondition("/")),
 				TimeoutPolicy: &projcontour.TimeoutPolicy{
 					Response: "600", // not 600s
 				},
@@ -283,8 +298,10 @@ func TestTimeoutPolicyRequestTimeout(t *testing.T) {
 		Resources: resources(t,
 			envoy.RouteConfiguration("ingress_http",
 				envoy.VirtualHost("test2.test.com",
-					envoy.Route(envoy.RoutePrefix("/"),
-						withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 0)), // zero means infinity
+					&envoy_api_v2_route.Route{
+						Match:  routePrefix("/"),
+						Action: withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 0), // zero means infinity
+					},
 				),
 			),
 			envoy.RouteConfiguration("ingress_https"),
@@ -297,7 +314,7 @@ func TestTimeoutPolicyRequestTimeout(t *testing.T) {
 		Spec: projcontour.HTTPProxySpec{
 			VirtualHost: &projcontour.VirtualHost{Fqdn: "test2.test.com"},
 			Routes: []projcontour.Route{{
-				Conditions: prefixCondition("/"),
+				Conditions: conditions(prefixCondition("/")),
 				TimeoutPolicy: &projcontour.TimeoutPolicy{
 					Response: "3m",
 				},
@@ -315,8 +332,10 @@ func TestTimeoutPolicyRequestTimeout(t *testing.T) {
 		Resources: resources(t,
 			envoy.RouteConfiguration("ingress_http",
 				envoy.VirtualHost("test2.test.com",
-					envoy.Route(envoy.RoutePrefix("/"),
-						withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 180*time.Second)),
+					&envoy_api_v2_route.Route{
+						Match:  routePrefix("/"),
+						Action: withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 180*time.Second),
+					},
 				),
 			),
 			envoy.RouteConfiguration("ingress_https"),
@@ -329,7 +348,7 @@ func TestTimeoutPolicyRequestTimeout(t *testing.T) {
 		Spec: projcontour.HTTPProxySpec{
 			VirtualHost: &projcontour.VirtualHost{Fqdn: "test2.test.com"},
 			Routes: []projcontour.Route{{
-				Conditions: prefixCondition("/"),
+				Conditions: conditions(prefixCondition("/")),
 				TimeoutPolicy: &projcontour.TimeoutPolicy{
 					Response: "infinty",
 				},
@@ -347,8 +366,10 @@ func TestTimeoutPolicyRequestTimeout(t *testing.T) {
 		Resources: resources(t,
 			envoy.RouteConfiguration("ingress_http",
 				envoy.VirtualHost("test2.test.com",
-					envoy.Route(envoy.RoutePrefix("/"),
-						withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 0)), // zero means infinity
+					&envoy_api_v2_route.Route{
+						Match:  routePrefix("/"),
+						Action: withResponseTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 0), // zero means infinity
+					},
 				),
 			),
 			envoy.RouteConfiguration("ingress_https"),
@@ -386,7 +407,7 @@ func TestTimeoutPolicyIdleTimeout(t *testing.T) {
 		Spec: projcontour.HTTPProxySpec{
 			VirtualHost: &projcontour.VirtualHost{Fqdn: "test2.test.com"},
 			Routes: []projcontour.Route{{
-				Conditions: prefixCondition("/"),
+				Conditions: conditions(prefixCondition("/")),
 				TimeoutPolicy: &projcontour.TimeoutPolicy{
 					Idle: "600", // not 600s
 				},
@@ -404,8 +425,10 @@ func TestTimeoutPolicyIdleTimeout(t *testing.T) {
 		Resources: resources(t,
 			envoy.RouteConfiguration("ingress_http",
 				envoy.VirtualHost("test2.test.com",
-					envoy.Route(envoy.RoutePrefix("/"),
-						withIdleTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 0)), // zero means infinity
+					&envoy_api_v2_route.Route{
+						Match:  routePrefix("/"),
+						Action: withIdleTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 0), // zero means infinity
+					},
 				),
 			),
 			envoy.RouteConfiguration("ingress_https"),
@@ -418,7 +441,7 @@ func TestTimeoutPolicyIdleTimeout(t *testing.T) {
 		Spec: projcontour.HTTPProxySpec{
 			VirtualHost: &projcontour.VirtualHost{Fqdn: "test2.test.com"},
 			Routes: []projcontour.Route{{
-				Conditions: prefixCondition("/"),
+				Conditions: conditions(prefixCondition("/")),
 				TimeoutPolicy: &projcontour.TimeoutPolicy{
 					Idle: "3m",
 				},
@@ -436,8 +459,10 @@ func TestTimeoutPolicyIdleTimeout(t *testing.T) {
 		Resources: resources(t,
 			envoy.RouteConfiguration("ingress_http",
 				envoy.VirtualHost("test2.test.com",
-					envoy.Route(envoy.RoutePrefix("/"),
-						withIdleTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 180*time.Second)),
+					&envoy_api_v2_route.Route{
+						Match:  routePrefix("/"),
+						Action: withIdleTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 180*time.Second),
+					},
 				),
 			),
 			envoy.RouteConfiguration("ingress_https"),
@@ -450,7 +475,7 @@ func TestTimeoutPolicyIdleTimeout(t *testing.T) {
 		Spec: projcontour.HTTPProxySpec{
 			VirtualHost: &projcontour.VirtualHost{Fqdn: "test2.test.com"},
 			Routes: []projcontour.Route{{
-				Conditions: prefixCondition("/"),
+				Conditions: conditions(prefixCondition("/")),
 				TimeoutPolicy: &projcontour.TimeoutPolicy{
 					Idle: "infinty",
 				},
@@ -468,8 +493,10 @@ func TestTimeoutPolicyIdleTimeout(t *testing.T) {
 		Resources: resources(t,
 			envoy.RouteConfiguration("ingress_http",
 				envoy.VirtualHost("test2.test.com",
-					envoy.Route(envoy.RoutePrefix("/"),
-						withIdleTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 0)), // zero means infinity
+					&envoy_api_v2_route.Route{
+						Match:  routePrefix("/"),
+						Action: withIdleTimeout(routeCluster("default/kuard/8080/da39a3ee5e"), 0), // zero means infinity
+					},
 				),
 			),
 			envoy.RouteConfiguration("ingress_https"),

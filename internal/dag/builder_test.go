@@ -14,6 +14,7 @@
 package dag
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -795,6 +796,18 @@ func TestDAGInsert(t *testing.T) {
 		},
 	}
 
+	i17 := &v1beta1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "default",
+		},
+		Spec: v1beta1.IngressSpec{
+			Rules: []v1beta1.IngressRule{{
+				Host:             "example.com",
+				IngressRuleValue: ingressrulevalue(backend("kuard", intstr.FromInt(8080))),
+			}},
+		},
+	}
 	// s3a and b have http/2 protocol annotations
 	s3a := &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1035,6 +1048,25 @@ func TestDAGInsert(t *testing.T) {
 		},
 	}
 
+	ir1f := &ingressroutev1.IngressRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-com",
+			Namespace: "default",
+		},
+		Spec: ingressroutev1.IngressRouteSpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "example.com",
+			},
+			Routes: []ingressroutev1.Route{{
+				Match: "/",
+				Services: []ingressroutev1.Service{{
+					Name: "kuarder",
+					Port: 8080,
+				}},
+			}},
+		},
+	}
+
 	// ir2 is like ir1 but refers to two backend services
 	ir2 := &ingressroutev1.IngressRoute{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1260,9 +1292,6 @@ func TestDAGInsert(t *testing.T) {
 				Match:            "/websocket",
 				EnableWebsockets: true,
 				Services: []ingressroutev1.Service{{
-					Name: "kuard",
-					Port: 8080,
-				}, {
 					Name: "kuard",
 					Port: 8080,
 				}},
@@ -1616,6 +1645,24 @@ func TestDAGInsert(t *testing.T) {
 			}},
 		},
 	}
+
+	// s2a is like s1 but with a different name again.
+	// used in testing override priority.
+	s2a := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuardest",
+			Namespace: "default",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:       "http",
+				Protocol:   "TCP",
+				Port:       8080,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	}
+
 	// s3 is like s1 but has a different port
 	s3 := &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1733,6 +1780,36 @@ func TestDAGInsert(t *testing.T) {
 				Name:     "blog",
 				Protocol: "TCP",
 				Port:     8080,
+			}},
+		},
+	}
+
+	s12 := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "teama",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:       "http",
+				Protocol:   "TCP",
+				Port:       8080,
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	}
+
+	s13 := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard",
+			Namespace: "teamb",
+		},
+		Spec: v1.ServiceSpec{
+			Ports: []v1.ServicePort{{
+				Name:       "http",
+				Protocol:   "TCP",
+				Port:       8080,
+				TargetPort: intstr.FromInt(8080),
 			}},
 		},
 	}
@@ -1896,6 +1973,87 @@ func TestDAGInsert(t *testing.T) {
 		},
 	}
 
+	// proxy1d tcp forwards secure traffic to default/kuard:8080 by TLS pass-through it,
+	// insecure traffic is 301 upgraded.
+	proxy1d := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard-tcp",
+			Namespace: s1.Namespace,
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "kuard.example.com",
+				TLS: &projcontour.TLS{
+					Passthrough: true,
+				},
+			},
+			Routes: []projcontour.Route{{
+				Services: []projcontour.Service{{
+					Name: s1.Name,
+					Port: 8080,
+				}},
+			}},
+			TCPProxy: &projcontour.TCPProxy{
+				Services: []projcontour.Service{{
+					Name: s1.Name,
+					Port: 8080,
+				}},
+			},
+		},
+	}
+
+	// proxy1e tcp forwards secure traffic to default/kuard:8080 by TLS pass-through it,
+	// insecure traffic is not 301 upgraded because of the permitInsecure: true annotation.
+	proxy1e := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuard-tcp",
+			Namespace: s1.Namespace,
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "kuard.example.com",
+				TLS: &projcontour.TLS{
+					Passthrough: true,
+				},
+			},
+			Routes: []projcontour.Route{{
+				PermitInsecure: true,
+				Services: []projcontour.Service{{
+					Name: s1.Name,
+					Port: 8080,
+				}},
+			}},
+			TCPProxy: &projcontour.TCPProxy{
+				Services: []projcontour.Service{{
+					Name: s1.Name,
+					Port: 8080,
+				}},
+			},
+		},
+	}
+
+	//proxy1f is identical to proxy1 and ir1, except for a different service.
+	// Used to test priority when importing ir then httproxy.
+	proxy1f := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-com",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "example.com",
+			},
+			Routes: []projcontour.Route{{
+				Conditions: []projcontour.Condition{{
+					Prefix: "/",
+				}},
+				Services: []projcontour.Service{{
+					Name: s2a.Name,
+					Port: 8080,
+				}},
+			}},
+		},
+	}
 	proxy2a := &projcontour.HTTPProxy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "example-com",
@@ -1955,7 +2113,7 @@ func TestDAGInsert(t *testing.T) {
 		},
 	}
 
-	proxy1e := &projcontour.HTTPProxy{
+	proxy2c := &projcontour.HTTPProxy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "example-com",
 			Namespace: "default",
@@ -2084,9 +2242,6 @@ func TestDAGInsert(t *testing.T) {
 				}},
 				EnableWebsockets: true,
 				Services: []projcontour.Service{{
-					Name: "kuard",
-					Port: 8080,
-				}, {
 					Name: "kuard",
 					Port: 8080,
 				}},
@@ -2653,6 +2808,254 @@ func TestDAGInsert(t *testing.T) {
 			}},
 		},
 	}
+
+	proxy108 := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "root",
+			Namespace: s1.Namespace,
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "example.com",
+			},
+			Includes: []projcontour.Include{{
+				Name:      "blogteama",
+				Namespace: "teama",
+				Conditions: []projcontour.Condition{{
+					Prefix: "/blog",
+					Header: &projcontour.HeaderCondition{
+						Name:     "x-header",
+						Contains: "abc",
+					},
+				}},
+			}, {
+				Name:      "blogteama",
+				Namespace: "teamb",
+				Conditions: []projcontour.Condition{{
+					Prefix: "/blog",
+					Header: &projcontour.HeaderCondition{
+						Name:     "x-header",
+						Contains: "abc",
+					},
+				}},
+			}},
+			Routes: []projcontour.Route{{
+				Conditions: []projcontour.Condition{{
+					Prefix: "/",
+				}},
+				Services: []projcontour.Service{{
+					Name: s1.Name,
+					Port: 8080,
+				}},
+			}},
+		},
+	}
+
+	proxy108a := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "blogteama",
+			Namespace: "teama",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			Routes: []projcontour.Route{{
+				Services: []projcontour.Service{{
+					Name: s12.Name,
+					Port: 8080,
+				}},
+			}},
+		},
+	}
+
+	proxy108b := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "blogteamb",
+			Namespace: "teamb",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			Routes: []projcontour.Route{{
+				Services: []projcontour.Service{{
+					Name: s13.Name,
+					Port: 8080,
+				}},
+			}},
+		},
+	}
+
+	proxyReplaceHostHeader := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-com",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "example.com",
+			},
+			Routes: []projcontour.Route{{
+				Conditions: []projcontour.Condition{{
+					Prefix: "/",
+				}},
+				Services: []projcontour.Service{{
+					Name: "nginx",
+					Port: 80,
+				}},
+				RequestHeadersPolicy: &projcontour.HeadersPolicy{
+					Set: []projcontour.HeaderValue{{
+						Name:  "Host",
+						Value: "bar.com",
+					}},
+				},
+			}},
+		},
+	}
+
+	proxyReplaceHostHeaderMultiple := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-com",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "example.com",
+			},
+			Routes: []projcontour.Route{{
+				Conditions: []projcontour.Condition{{
+					Prefix: "/",
+				}},
+				Services: []projcontour.Service{{
+					Name: "nginx",
+					Port: 80,
+				}},
+				RequestHeadersPolicy: &projcontour.HeadersPolicy{
+					Set: []projcontour.HeaderValue{{
+						Name:  "Host",
+						Value: "bar.com",
+					}, {
+						Name:  "x-header",
+						Value: "bar.com",
+					}, {
+						Name:  "y-header",
+						Value: "zed.com",
+					}},
+				},
+			}},
+		},
+	}
+
+	proxyReplaceNonHostHeader := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-com",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "example.com",
+			},
+			Routes: []projcontour.Route{{
+				Conditions: []projcontour.Condition{{
+					Prefix: "/",
+				}},
+				Services: []projcontour.Service{{
+					Name: "nginx",
+					Port: 80,
+				}},
+				RequestHeadersPolicy: &projcontour.HeadersPolicy{
+					Set: []projcontour.HeaderValue{{
+						Name:  "x-header",
+						Value: "bar.com",
+					}},
+				},
+			}},
+		},
+	}
+
+	proxyReplaceHeaderEmptyValue := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-com",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "example.com",
+			},
+			Routes: []projcontour.Route{{
+				Conditions: []projcontour.Condition{{
+					Prefix: "/",
+				}},
+				Services: []projcontour.Service{{
+					Name: "nginx",
+					Port: 80,
+				}},
+				RequestHeadersPolicy: &projcontour.HeadersPolicy{
+					Set: []projcontour.HeaderValue{{
+						Name: "x-header",
+					}},
+				},
+			}},
+		},
+	}
+
+	// proxy109 has a route that rewrites headers.
+	proxy109 := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-com",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "example.com",
+			},
+			Routes: []projcontour.Route{{
+				Conditions: []projcontour.Condition{{
+					Prefix: "/",
+				}},
+				Services: []projcontour.Service{{
+					Name: "kuard",
+					Port: 8080,
+				}},
+				RequestHeadersPolicy: &projcontour.HeadersPolicy{
+					Set: []projcontour.HeaderValue{{
+						Name:  "In-Foo",
+						Value: "bar",
+					}},
+					Remove: []string{
+						"In-Baz",
+					},
+				},
+				ResponseHeadersPolicy: &projcontour.HeadersPolicy{
+					Set: []projcontour.HeaderValue{{
+						Name:  "Out-Foo",
+						Value: "bar",
+					}},
+					Remove: []string{
+						"Out-Baz",
+					},
+				},
+			}},
+		},
+	}
+	protocol := "h2c"
+	proxy110 := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-com",
+			Namespace: "default",
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "example.com",
+			},
+			Routes: []projcontour.Route{{
+				Conditions: []projcontour.Condition{{
+					Prefix: "/",
+				}},
+				Services: []projcontour.Service{{
+					Name:     "kuard",
+					Port:     8080,
+					Protocol: &protocol,
+				}},
+			}},
+		},
+	}
+
 	tests := map[string]struct {
 		objs                  []interface{}
 		disablePermitInsecure bool
@@ -3296,7 +3699,7 @@ func TestDAGInsert(t *testing.T) {
 				},
 			),
 		},
-		"insert ingressroute with multiple upstreams prefix rewrite route, websocket routes are dropped": {
+		"insert ingressroute with multiple upstreams prefix rewrite route with websockets on a single upstream": {
 			objs: []interface{}{
 				ir10b, s1,
 			},
@@ -3306,6 +3709,7 @@ func TestDAGInsert(t *testing.T) {
 					VirtualHosts: virtualhosts(
 						virtualhost("example.com",
 							prefixroute("/", service(s1)),
+							routeWebsocket("/websocket", service(s1)),
 						),
 					),
 				},
@@ -3748,25 +4152,7 @@ func TestDAGInsert(t *testing.T) {
 			objs: []interface{}{
 				ir17, s1a,
 			},
-			want: listeners(
-				&Listener{
-					Port: 80,
-					VirtualHosts: virtualhosts(
-						virtualhost("example.com",
-							routeCluster("/",
-								&Cluster{
-									Upstream: &Service{
-										Name:        s1a.Name,
-										Namespace:   s1a.Namespace,
-										ServicePort: &s1a.Spec.Ports[0],
-										Protocol:    "tls",
-									},
-								},
-							),
-						),
-					),
-				},
-			),
+			want: listeners(), // no listeners, missing certificate
 		},
 		"insert ingressroute expecting verification": {
 			objs: []interface{}{
@@ -3785,6 +4171,7 @@ func TestDAGInsert(t *testing.T) {
 										ServicePort: &s1a.Spec.Ports[0],
 										Protocol:    "tls",
 									},
+									Protocol: "tls",
 									UpstreamValidation: &UpstreamValidation{
 										CACertificate: secret(cert1),
 										SubjectName:   "example.com",
@@ -4054,9 +4441,9 @@ func TestDAGInsert(t *testing.T) {
 					VirtualHosts: virtualhosts(
 						virtualhost("*",
 							prefixroute("/", &Service{
-								Name:        s3a.Name,
-								Namespace:   s3a.Namespace,
-								ServicePort: &s3a.Spec.Ports[0],
+								Name:        s3d.Name,
+								Namespace:   s3d.Namespace,
+								ServicePort: &s3d.Spec.Ports[0],
 								Protocol:    "h2c",
 							}),
 						),
@@ -4074,9 +4461,9 @@ func TestDAGInsert(t *testing.T) {
 					VirtualHosts: virtualhosts(
 						virtualhost("*",
 							prefixroute("/", &Service{
-								Name:        s3b.Name,
-								Namespace:   s3b.Namespace,
-								ServicePort: &s3b.Spec.Ports[0],
+								Name:        s3e.Name,
+								Namespace:   s3e.Namespace,
+								ServicePort: &s3e.Spec.Ports[0],
 								Protocol:    "h2",
 							}),
 						),
@@ -4094,9 +4481,9 @@ func TestDAGInsert(t *testing.T) {
 					VirtualHosts: virtualhosts(
 						virtualhost("*",
 							prefixroute("/", &Service{
-								Name:        s3c.Name,
-								Namespace:   s3c.Namespace,
-								ServicePort: &s3c.Spec.Ports[0],
+								Name:        s3f.Name,
+								Namespace:   s3f.Namespace,
+								ServicePort: &s3f.Spec.Ports[0],
 								Protocol:    "tls",
 							}),
 						),
@@ -4616,7 +5003,7 @@ func TestDAGInsert(t *testing.T) {
 		},
 		"insert httpproxy w/ healthcheck": {
 			objs: []interface{}{
-				proxy1e, s1,
+				proxy2c, s1,
 			},
 			want: listeners(
 				&Listener{
@@ -4671,7 +5058,7 @@ func TestDAGInsert(t *testing.T) {
 				},
 			),
 		},
-		"insert httpproxy with multiple upstreams prefix rewrite route, websocket routes are dropped": {
+		"insert httpproxy with multiple upstreams prefix rewrite route and websockets along one path": {
 			objs: []interface{}{
 				proxy10b, s1,
 			},
@@ -4681,11 +5068,13 @@ func TestDAGInsert(t *testing.T) {
 					VirtualHosts: virtualhosts(
 						virtualhost("example.com",
 							prefixroute("/", service(s1)),
+							routeWebsocket("/websocket", service(s1)),
 						),
 					),
 				},
 			),
 		},
+
 		"insert httpproxy and service": {
 			objs: []interface{}{
 				proxy1, s1,
@@ -4699,6 +5088,22 @@ func TestDAGInsert(t *testing.T) {
 				},
 			),
 		},
+
+		"insert httpproxy with protocol and service": {
+			objs: []interface{}{
+				proxy110, s1,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("example.com",
+							routeProtocol("/", protocol, service(s1))),
+					),
+				},
+			),
+		},
+
 		"insert httpproxy without tls version": {
 			objs: []interface{}{
 				proxy6, s1, sec1,
@@ -4734,6 +5139,7 @@ func TestDAGInsert(t *testing.T) {
 										ServicePort: &s1a.Spec.Ports[0],
 										Protocol:    "tls",
 									},
+									Protocol: "tls",
 									UpstreamValidation: &UpstreamValidation{
 										CACertificate: secret(cert1),
 										SubjectName:   "example.com",
@@ -5086,6 +5492,12 @@ func TestDAGInsert(t *testing.T) {
 			},
 			want: listeners(),
 		},
+		"insert httpproxy duplicate conditions on include": {
+			objs: []interface{}{
+				proxy108, proxy108a, proxy108b, s1, s12, s13,
+			},
+			want: listeners(),
+		},
 		"insert proxy with tcp forward without TLS termination w/ passthrough": {
 			objs: []interface{}{
 				proxy1a, s1,
@@ -5108,6 +5520,88 @@ func TestDAGInsert(t *testing.T) {
 				},
 			),
 		},
+		// issue 1952
+		"insert proxy with tcp forward without TLS termination w/ passthrough and 301 upgrade of port 80": {
+			objs: []interface{}{
+				proxy1d, s1,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("kuard.example.com",
+							routeUpgrade("/", service(s1)),
+						),
+					),
+				},
+				&Listener{
+					Port: 443,
+					VirtualHosts: virtualhosts(
+						&SecureVirtualHost{
+							VirtualHost: VirtualHost{
+								Name: "kuard.example.com",
+							},
+							TCPProxy: &TCPProxy{
+								Clusters: clusters(
+									service(s1),
+								),
+							},
+						},
+					),
+				},
+			),
+		},
+		"insert proxy with tcp forward without TLS termination w/ passthrough without 301 upgrade of port 80": {
+			objs: []interface{}{
+				proxy1e, s1,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("kuard.example.com",
+							prefixroute("/", service(s1)),
+						),
+					),
+				},
+				&Listener{
+					Port: 443,
+					VirtualHosts: virtualhosts(
+						&SecureVirtualHost{
+							VirtualHost: VirtualHost{
+								Name: "kuard.example.com",
+							},
+							TCPProxy: &TCPProxy{
+								Clusters: clusters(
+									service(s1),
+								),
+							},
+						},
+					),
+				},
+			),
+		},
+
+		"insert httpproxy with route-level header manipulation": {
+			objs: []interface{}{
+				proxy109, s1,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("example.com",
+							routeHeaders("/", map[string]string{
+								"In-Foo": "bar",
+							}, []string{"In-Baz"}, map[string]string{
+								"Out-Foo": "bar",
+							}, []string{"Out-Baz"}, service(s1)),
+						),
+					),
+				},
+			),
+		},
+
 		// issue 1399
 		"service shared across ingress and httpproxy tcpproxy": {
 			objs: []interface{}{
@@ -5170,6 +5664,258 @@ func TestDAGInsert(t *testing.T) {
 								Clusters: clusters(service(s9)),
 							},
 						},
+					),
+				},
+			),
+		},
+		// issue 1954
+		"httpproxy tcpproxy + permitinsecure": {
+			objs: []interface{}{
+				sec1,
+				s9,
+				&projcontour.HTTPProxy{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "nginx",
+						Namespace: "default",
+					},
+					Spec: projcontour.HTTPProxySpec{
+						VirtualHost: &projcontour.VirtualHost{
+							Fqdn: "example.com",
+							TLS: &projcontour.TLS{
+								SecretName: sec1.Name,
+							},
+						},
+						Routes: []projcontour.Route{{
+							PermitInsecure: true,
+							Services: []projcontour.Service{{
+								Name: s9.Name,
+								Port: 80,
+							}},
+						}},
+						TCPProxy: &projcontour.TCPProxy{
+							Services: []projcontour.Service{{
+								Name: s9.Name,
+								Port: 80,
+							}},
+						},
+					},
+				},
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						// not upgraded because the route is permitInsecure: true
+						virtualhost("example.com", prefixroute("/", service(s9))),
+					),
+				},
+				&Listener{
+					Port: 443,
+					VirtualHosts: virtualhosts(
+						&SecureVirtualHost{
+							VirtualHost: VirtualHost{
+								Name: "example.com",
+							},
+							MinProtoVersion: envoy_api_v2_auth.TlsParameters_TLSv1_1,
+							Secret:          secret(sec1),
+							TCPProxy: &TCPProxy{
+								Clusters: clusters(service(s9)),
+							},
+						},
+					),
+				},
+			),
+		},
+		// issue 1954
+		"httpproxy tcpproxy + tlspassthrough + permitinsecure": {
+			objs: []interface{}{
+				s9,
+				&projcontour.HTTPProxy{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "nginx",
+						Namespace: "default",
+					},
+					Spec: projcontour.HTTPProxySpec{
+						VirtualHost: &projcontour.VirtualHost{
+							Fqdn: "example.com",
+							TLS: &projcontour.TLS{
+								Passthrough: true,
+							},
+						},
+						Routes: []projcontour.Route{{
+							PermitInsecure: true,
+							Services: []projcontour.Service{{
+								Name: s9.Name,
+								Port: 80,
+							}},
+						}},
+						TCPProxy: &projcontour.TCPProxy{
+							Services: []projcontour.Service{{
+								Name: s9.Name,
+								Port: 80,
+							}},
+						},
+					},
+				},
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						// not upgraded because the route is permitInsecure: true
+						virtualhost("example.com", prefixroute("/", service(s9))),
+					),
+				},
+				&Listener{
+					Port: 443,
+					VirtualHosts: virtualhosts(
+						&SecureVirtualHost{
+							VirtualHost: VirtualHost{
+								Name: "example.com",
+							},
+							MinProtoVersion: envoy_api_v2_auth.TlsParameters_TLS_AUTO,
+							TCPProxy: &TCPProxy{
+								Clusters: clusters(service(s9)),
+							},
+						},
+					),
+				},
+			),
+		},
+		// Assert that a route in IngressRoute takes precedence over Ingress.
+		// The service is different in proxy1f so we can tell which one gets priority.
+		"Ingress then IngressRoute with identical details, except referencing s2": {
+			objs: []interface{}{
+				i17,
+				ir1f,
+				s1,
+				s2,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("example.com", prefixroute("/", service(s2))),
+					),
+				},
+			),
+		},
+		"IngressRoute then HTTPProxy with identical details, except referencing s2a": {
+			objs: []interface{}{
+				ir1f,
+				proxy1f,
+				s2,
+				s2a,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("example.com", prefixroute("/", service(s2a))),
+					),
+				},
+			),
+		},
+		"Ingress then HTTPProxy with identical details, except referencing s2a": {
+			objs: []interface{}{
+				i17,
+				proxy1f,
+				s1,
+				s2a,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("example.com", prefixroute("/", service(s2a))),
+					),
+				},
+			),
+		},
+		"insert proxy with replace header policy - host header": {
+			objs: []interface{}{
+				proxyReplaceHostHeader,
+				s9,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("example.com", &Route{
+							PathCondition: prefix("/"),
+							Clusters:      clustermap(s9),
+							RequestHeadersPolicy: &HeadersPolicy{
+								HostRewrite: "bar.com",
+							},
+						}),
+					),
+				},
+			),
+		},
+		"insert proxy with replace header policy - host header multiple": {
+			objs: []interface{}{
+				proxyReplaceHostHeaderMultiple,
+				s9,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("example.com", &Route{
+							PathCondition: prefix("/"),
+							Clusters:      clustermap(s9),
+							RequestHeadersPolicy: &HeadersPolicy{
+								HostRewrite: "bar.com",
+								Set: map[string]string{
+									"X-Header": "bar.com",
+									"Y-Header": "zed.com",
+								},
+							},
+						}),
+					),
+				},
+			),
+		},
+		"insert proxy with replace header policy - not host header": {
+			objs: []interface{}{
+				proxyReplaceNonHostHeader,
+				s9,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("example.com", &Route{
+							PathCondition: prefix("/"),
+							Clusters:      clustermap(s9),
+							RequestHeadersPolicy: &HeadersPolicy{
+								Set: map[string]string{
+									"X-Header": "bar.com",
+								},
+							},
+						}),
+					),
+				},
+			),
+		},
+		"insert proxy with replace header policy - empty value": {
+			objs: []interface{}{
+				proxyReplaceHeaderEmptyValue,
+				s9,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("example.com", &Route{
+							PathCondition: prefix("/"),
+							Clusters:      clustermap(s9),
+							RequestHeadersPolicy: &HeadersPolicy{
+								Set: map[string]string{
+									"X-Header": "",
+								},
+							},
+						}),
 					),
 				},
 			),
@@ -5661,6 +6407,7 @@ func TestHttpPaths(t *testing.T) {
 		})
 	}
 }
+
 func TestEnforceRoute(t *testing.T) {
 	tests := map[string]struct {
 		tlsEnabled     bool
@@ -5751,6 +6498,113 @@ func TestSplitSecret(t *testing.T) {
 	}
 }
 
+func TestValidateHeaderAlteration(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      *projcontour.HeadersPolicy
+		want    *HeadersPolicy
+		wantErr error
+	}{{
+		name: "empty is fine",
+	}, {
+		name: "set two, remove one",
+		in: &projcontour.HeadersPolicy{
+			Set: []projcontour.HeaderValue{{
+				Name:  "K-Foo",
+				Value: "bar",
+			}, {
+				Name:  "k-baz", // This gets canonicalized
+				Value: "blah",
+			}},
+			Remove: []string{"K-Nada"},
+		},
+		want: &HeadersPolicy{
+			Set: map[string]string{
+				"K-Foo": "bar",
+				"K-Baz": "blah",
+			},
+			Remove: []string{"K-Nada"},
+		},
+	}, {
+		name: "duplicate set",
+		in: &projcontour.HeadersPolicy{
+			Set: []projcontour.HeaderValue{{
+				Name:  "K-Foo",
+				Value: "bar",
+			}, {
+				Name:  "k-foo", // This gets canonicalized
+				Value: "blah",
+			}},
+		},
+		wantErr: errors.New(`duplicate header addition: "K-Foo"`),
+	}, {
+		name: "duplicate remove",
+		in: &projcontour.HeadersPolicy{
+			Remove: []string{"K-Foo", "k-foo"},
+		},
+		wantErr: errors.New(`duplicate header removal: "K-Foo"`),
+	}, {
+		name: "invalid set header",
+		in: &projcontour.HeadersPolicy{
+			Set: []projcontour.HeaderValue{{
+				Name:  "  K-Foo",
+				Value: "bar",
+			}},
+		},
+		wantErr: errors.New(`invalid set header "  K-Foo": [a valid HTTP header must consist of alphanumeric characters or '-' (e.g. 'X-Header-Name', regex used for validation is '[-A-Za-z0-9]+')]`),
+	}, {
+		name: "invalid remove header",
+		in: &projcontour.HeadersPolicy{
+			Remove: []string{"  K-Foo"},
+		},
+		wantErr: errors.New(`invalid remove header "  K-Foo": [a valid HTTP header must consist of alphanumeric characters or '-' (e.g. 'X-Header-Name', regex used for validation is '[-A-Za-z0-9]+')]`),
+	}, {
+		name: "invalid set header (special headers)",
+		in: &projcontour.HeadersPolicy{
+			Set: []projcontour.HeaderValue{{
+				Name:  "Host",
+				Value: "bar",
+			}},
+		},
+		wantErr: errors.New(`rewriting "Host" header is not supported`),
+	}, {
+		name: "percents are escaped",
+		in: &projcontour.HeadersPolicy{
+			Set: []projcontour.HeaderValue{{
+				Name:  "K-Foo",
+				Value: "100%",
+			}, {
+				Name:  "Lot-Of-Percents",
+				Value: "%%%%%",
+			}, {
+				Name:  "k-baz", // This gets canonicalized
+				Value: "%DOWNSTREAM_LOCAL_ADDRESS%",
+			}},
+		},
+		want: &HeadersPolicy{
+			Set: map[string]string{
+				"K-Foo":           "100%%",
+				"K-Baz":           "%%DOWNSTREAM_LOCAL_ADDRESS%%",
+				"Lot-Of-Percents": "%%%%%%%%%%",
+			},
+		},
+	}}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, gotErr := headersPolicy(test.in, false)
+			if !cmp.Equal(test.want, got) {
+				t.Errorf("set (-want, +got) = %s", cmp.Diff(test.want, got))
+			}
+			if (test.wantErr != nil) != (gotErr != nil) {
+				t.Errorf("err = %v, wanted %v", gotErr, test.wantErr)
+			} else if test.wantErr != nil && gotErr != nil && test.wantErr.Error() != gotErr.Error() {
+				t.Errorf("err = %v, wanted %v", gotErr, test.wantErr)
+			}
+		})
+	}
+}
+
 func routes(routes ...*Route) map[string]*Route {
 	if len(routes) == 0 {
 		return nil
@@ -5767,6 +6621,19 @@ func prefixroute(prefix string, first *Service, rest ...*Service) *Route {
 	return &Route{
 		PathCondition: &PrefixCondition{Prefix: prefix},
 		Clusters:      clusters(services...),
+	}
+}
+
+func routeProtocol(prefix string, protocol string, first *Service, rest ...*Service) *Route {
+	services := append([]*Service{first}, rest...)
+
+	cs := clusters(services...)
+	for _, c := range cs {
+		c.Protocol = protocol
+	}
+	return &Route{
+		PathCondition: &PrefixCondition{Prefix: prefix},
+		Clusters:      cs,
 	}
 }
 
@@ -5795,10 +6662,24 @@ func routeWebsocket(prefix string, first *Service, rest ...*Service) *Route {
 	return r
 }
 
+func routeHeaders(prefix string, requestSet map[string]string, requestRemove []string, responseSet map[string]string, responseRemove []string, first *Service, rest ...*Service) *Route {
+	r := prefixroute(prefix, first, rest...)
+	r.RequestHeadersPolicy = &HeadersPolicy{
+		Set:    requestSet,
+		Remove: requestRemove,
+	}
+	r.ResponseHeadersPolicy = &HeadersPolicy{
+		Set:    responseSet,
+		Remove: responseRemove,
+	}
+	return r
+}
+
 func clusters(services ...*Service) (c []*Cluster) {
 	for _, s := range services {
 		c = append(c, &Cluster{
 			Upstream: s,
+			Protocol: s.Protocol,
 		})
 	}
 	return c

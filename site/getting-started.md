@@ -11,7 +11,7 @@ This page will help you get up and running with Contour.
 
 Before you start you will need:
 
-- A Kubernetes cluster that supports Service objects of `type: LoadBalancer` ([AWS Quickstart cluster](https://aws.amazon.com/quickstart/architecture/vmware-kubernetes/) or Minikube, for example)
+- A Kubernetes cluster that supports Service objects of `type: LoadBalancer` ([AWS Quickstart cluster][0] or Minikube, for example)
 - `kubectl` configured with admin access to your cluster
 - RBAC must be enabled on your cluster.
 
@@ -26,7 +26,7 @@ $ kubectl apply -f {{ site.url }}/quickstart/contour.yaml
 This command creates:
 
 - A new namespace `projectcontour` with two instances of Contour in the namespace
-- A Service of `type: LoadBalancer` that points to the Contour instances
+- A Service of `type: LoadBalancer` that points to the Contour's Envoy instances
 - Depending on your configuration, new cloud resources -- for example, ELBs in AWS
 
 See also [TLS support][7] for details on configuring TLS support for the services behind Contour.
@@ -35,7 +35,7 @@ For information on configuring TLS for gRPC between Contour and Envoy, see [our 
 
 ### Example workload
 
-If you don't have an application ready to run with Contour, you can explore with [kuard](https://github.com/kubernetes-up-and-running/kuard).
+If you don't have an application ready to run with Contour, you can explore with [kuard][9].
 
 Run:
 
@@ -47,12 +47,12 @@ This example specifies a default backend for all hosts, so that you can test you
 
 ## Access your cluster
 
-Now you can retrieve the external address of Contour's load balancer:
+Now you can retrieve the external address of Contour's Envoy load balancer:
 
 ```bash
-$ kubectl get -n projectcontour service contour -o wide
-NAME      CLUSTER-IP     EXTERNAL-IP                                                                    PORT(S)        AGE       SELECTOR
-contour   10.106.53.14   a47761ccbb9ce11e7b27f023b7e83d33-2036788482.ap-southeast-2.elb.amazonaws.com   80:30274/TCP   3h        app=contour
+$ kubectl get -n projectcontour service envoy -o wide
+NAME    TYPE           CLUSTER-IP       EXTERNAL-IP                                                               PORT(S)                      AGE     SELECTOR
+envoy   LoadBalancer   10.100.161.248   a9be40da020a011eab39e0ab1af7de84-1808936165.eu-west-1.elb.amazonaws.com   80:30724/TCP,443:32097/TCP   4m58s   app=envoy
 ```
 
 ## Configuring DNS
@@ -66,7 +66,7 @@ How you configure DNS depends on your platform:
 
 For more deployment options, including uninstalling Contour, see the [deployment documentation][1].
 
-See also the Kubernetes documentation for [Services](https://kubernetes.io/docs/concepts/services-networking/service/), [Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/), and [HTTPProxy][2].
+See also the Kubernetes documentation for [Services][10], [Ingress][11], and [HTTPProxy][2].
 
 The [detailed documentation][3] provides additional information, including an introduction to Envoy and an explanation of how Contour maps key Envoy concepts to Kubernetes.
 
@@ -74,13 +74,18 @@ We've also got [a FAQ][4] for short-answer questions and conceptual stuff that d
 
 ## Troubleshooting
 
-If you encounter issues, review the [troubleshooting docs][5], [file an issue][6], or talk to us on the [#contour channel](https://kubernetes.slack.com/messages/contour) on the Kubernetes Slack server.
+If you encounter issues, review the [troubleshooting docs][5], [file an issue][6], or talk to us on the [#contour channel][12] on the Kubernetes Slack server.
 
-[1]: {{ site.github.repository_url }}/tree/master/docs/deploy-options.md
-[2]: {{ site.github.repository_url }}/tree/master/docs/httpproxy.md
-[3]: {{ site.github.repository_url }}/tree/master/docs/
-[4]: {{ site.github.repository_url }}/tree/master/docs/FAQ.md
-[5]: {{ site.github.repository_url }}/tree/master/docs/troubleshooting.md
-[6]: {{ site.github.repository_url }}/issues
-[7]: {{ site.github.repository_url }}/tree/master/docs/tls.md
-[8]: {{ site.github.repository_url }}/tree/master/docs/grpc-tls-howto.md
+[0]: https://aws.amazon.com/quickstart/architecture/vmware-kubernetes
+[1]: /docs/{{site.latest}}/deploy-options
+[2]: /docs/{{site.latest}}/httpproxy
+[3]: /docs
+[4]: {% link _resources/faq.md %}
+[5]: /docs/{{site.latest}}/troubleshooting
+[6]: {{site.github.repository_url}}/issues
+[7]: {% link _guides/tls.md %}
+[8]: /docs/{{site.latest}}/grpc-tls-howto
+[9]: https://github.com/kubernetes-up-and-running/kuard
+[10]: https://kubernetes.io/docs/concepts/services-networking/service
+[11]: https://kubernetes.io/docs/concepts/services-networking/ingress
+[12]: {{site.footer_social_links.Slack.url}}

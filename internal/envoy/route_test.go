@@ -20,6 +20,7 @@ import (
 	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	envoy_api_v2_core "github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
 	envoy_api_v2_route "github.com/envoyproxy/go-control-plane/envoy/api/v2/route"
+	"github.com/golang/protobuf/ptypes/wrappers"
 	"github.com/projectcontour/contour/internal/assert"
 	"github.com/projectcontour/contour/internal/dag"
 	"github.com/projectcontour/contour/internal/protobuf"
@@ -27,40 +28,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
-
-func TestRoute(t *testing.T) {
-	service := &v1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kuard",
-			Namespace: "default",
-		},
-		Spec: v1.ServiceSpec{
-			Ports: []v1.ServicePort{{
-				Name:       "http",
-				Protocol:   "TCP",
-				Port:       8080,
-				TargetPort: intstr.FromInt(8080),
-			}},
-		},
-	}
-	cluster := &dag.Cluster{
-		Upstream: &dag.Service{
-			Name:        service.Name,
-			Namespace:   service.Namespace,
-			ServicePort: &service.Spec.Ports[0],
-		},
-	}
-	match := RoutePrefix("/")
-	action := RouteRoute(&dag.Route{
-		Clusters: []*dag.Cluster{cluster},
-	})
-	got := Route(match, action)
-	want := &envoy_api_v2_route.Route{
-		Match:  match,
-		Action: action,
-	}
-	assert.Equal(t, want, got)
-}
 
 func TestRouteRoute(t *testing.T) {
 	s1 := &v1.Service{
@@ -189,6 +156,76 @@ func TestRouteRoute(t *testing.T) {
 								Weight: protobuf.UInt32(90),
 							}},
 							TotalWeight: protobuf.UInt32(90),
+						},
+					},
+					UpgradeConfigs: []*envoy_api_v2_route.RouteAction_UpgradeConfig{{
+						UpgradeType: "websocket",
+					}},
+				},
+			},
+		},
+		"single with header manipulations": {
+			route: &dag.Route{
+				Websocket: true,
+				Clusters: []*dag.Cluster{{
+					Upstream: &dag.Service{
+						Name:        s1.Name,
+						Namespace:   s1.Namespace,
+						ServicePort: &s1.Spec.Ports[0],
+					},
+
+					RequestHeadersPolicy: &dag.HeadersPolicy{
+						Set: map[string]string{
+							"K-Foo":   "bar",
+							"K-Sauce": "spicy",
+						},
+						Remove: []string{"K-Bar"},
+					},
+					ResponseHeadersPolicy: &dag.HeadersPolicy{
+						Set: map[string]string{
+							"K-Blah": "boo",
+						},
+						Remove: []string{"K-Baz"},
+					},
+				}},
+			},
+			want: &envoy_api_v2_route.Route_Route{
+				Route: &envoy_api_v2_route.RouteAction{
+					ClusterSpecifier: &envoy_api_v2_route.RouteAction_WeightedClusters{
+						WeightedClusters: &envoy_api_v2_route.WeightedCluster{
+							Clusters: []*envoy_api_v2_route.WeightedCluster_ClusterWeight{{
+								Name:   "default/kuard/8080/da39a3ee5e",
+								Weight: protobuf.UInt32(1),
+								RequestHeadersToAdd: []*envoy_api_v2_core.HeaderValueOption{{
+									Header: &envoy_api_v2_core.HeaderValue{
+										Key:   "K-Foo",
+										Value: "bar",
+									},
+									Append: &wrappers.BoolValue{
+										Value: false,
+									},
+								}, {
+									Header: &envoy_api_v2_core.HeaderValue{
+										Key:   "K-Sauce",
+										Value: "spicy",
+									},
+									Append: &wrappers.BoolValue{
+										Value: false,
+									},
+								}},
+								RequestHeadersToRemove: []string{"K-Bar"},
+								ResponseHeadersToAdd: []*envoy_api_v2_core.HeaderValueOption{{
+									Header: &envoy_api_v2_core.HeaderValue{
+										Key:   "K-Blah",
+										Value: "boo",
+									},
+									Append: &wrappers.BoolValue{
+										Value: false,
+									},
+								}},
+								ResponseHeadersToRemove: []string{"K-Baz"},
+							}},
+							TotalWeight: protobuf.UInt32(1),
 						},
 					},
 					UpgradeConfigs: []*envoy_api_v2_route.RouteAction_UpgradeConfig{{
@@ -377,6 +414,22 @@ func TestRouteRoute(t *testing.T) {
 							},
 						},
 					}},
+				},
+			},
+		},
+		"host header rewrite": {
+			route: &dag.Route{
+				RequestHeadersPolicy: &dag.HeadersPolicy{
+					HostRewrite: "bar.com",
+				},
+				Clusters: []*dag.Cluster{c1},
+			},
+			want: &envoy_api_v2_route.Route_Route{
+				Route: &envoy_api_v2_route.RouteAction{
+					ClusterSpecifier: &envoy_api_v2_route.RouteAction_Cluster{
+						Cluster: "default/kuard/8080/da39a3ee5e",
+					},
+					HostRewriteSpecifier: &envoy_api_v2_route.RouteAction_HostRewrite{HostRewrite: "bar.com"},
 				},
 			},
 		},
@@ -600,7 +653,7 @@ func TestUpgradeHTTPS(t *testing.T) {
 	assert.Equal(t, want, got)
 }
 
-func TestHeaderConditions(t *testing.T) {
+func TestRouteMatch(t *testing.T) {
 	tests := map[string]struct {
 		route *dag.Route
 		want  *envoy_api_v2_route.RouteMatch
@@ -618,8 +671,8 @@ func TestHeaderConditions(t *testing.T) {
 				Headers: []*envoy_api_v2_route.HeaderMatcher{{
 					Name:        "x-header",
 					InvertMatch: false,
-					HeaderMatchSpecifier: &envoy_api_v2_route.HeaderMatcher_RegexMatch{
-						RegexMatch: ".*11-22-33-44.*",
+					HeaderMatchSpecifier: &envoy_api_v2_route.HeaderMatcher_SafeRegexMatch{
+						SafeRegexMatch: SafeRegexMatch(".*11-22-33-44.*"),
 					},
 				}},
 			},
@@ -637,8 +690,8 @@ func TestHeaderConditions(t *testing.T) {
 				Headers: []*envoy_api_v2_route.HeaderMatcher{{
 					Name:        "x-header",
 					InvertMatch: false,
-					HeaderMatchSpecifier: &envoy_api_v2_route.HeaderMatcher_RegexMatch{
-						RegexMatch: ".*11\\.22\\.33\\.44.*",
+					HeaderMatchSpecifier: &envoy_api_v2_route.HeaderMatcher_SafeRegexMatch{
+						SafeRegexMatch: SafeRegexMatch(".*11\\.22\\.33\\.44.*"),
 					},
 				}},
 			},
@@ -656,10 +709,37 @@ func TestHeaderConditions(t *testing.T) {
 				Headers: []*envoy_api_v2_route.HeaderMatcher{{
 					Name:        "x-header",
 					InvertMatch: false,
-					HeaderMatchSpecifier: &envoy_api_v2_route.HeaderMatcher_RegexMatch{
-						RegexMatch: ".*11\\.\\[22\\]\\.\\*33\\.44.*",
+					HeaderMatchSpecifier: &envoy_api_v2_route.HeaderMatcher_SafeRegexMatch{
+						SafeRegexMatch: SafeRegexMatch(".*11\\.\\[22\\]\\.\\*33\\.44.*"),
 					},
 				}},
+			},
+		},
+		"path prefix": {
+			route: &dag.Route{
+				PathCondition: &dag.PrefixCondition{
+					Prefix: "/foo",
+				},
+			},
+			want: &envoy_api_v2_route.RouteMatch{
+				PathSpecifier: &envoy_api_v2_route.RouteMatch_Prefix{
+					Prefix: "/foo",
+				},
+			},
+		},
+		"path regex": {
+			route: &dag.Route{
+				PathCondition: &dag.RegexCondition{
+					Regex: "/v.1/*",
+				},
+			},
+			want: &envoy_api_v2_route.RouteMatch{
+				PathSpecifier: &envoy_api_v2_route.RouteMatch_SafeRegex{
+					// note, unlike header conditions this is not a quoted regex because
+					// the value comes directly from the Ingress.Paths.Path value which
+					// is permitted to be a bare regex.
+					SafeRegex: SafeRegexMatch("/v.1/*"),
+				},
 			},
 		},
 	}

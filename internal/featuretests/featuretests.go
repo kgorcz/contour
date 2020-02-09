@@ -27,9 +27,11 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/any"
-	"github.com/projectcontour/contour/apis/generated/clientset/versioned/fake"
+	ingressroutev1 "github.com/projectcontour/contour/apis/contour/v1beta1"
+	projcontour "github.com/projectcontour/contour/apis/projectcontour/v1"
 	"github.com/projectcontour/contour/internal/assert"
 	"github.com/projectcontour/contour/internal/contour"
+	"github.com/projectcontour/contour/internal/dag"
 	cgrpc "github.com/projectcontour/contour/internal/grpc"
 	"github.com/projectcontour/contour/internal/k8s"
 	"github.com/projectcontour/contour/internal/metrics"
@@ -76,21 +78,30 @@ func setup(t *testing.T, opts ...func(*contour.EventHandler)) (cache.ResourceEve
 
 	rand.Seed(time.Now().Unix())
 
+	statusCache := &k8s.StatusCacher{}
+
 	eh := &contour.EventHandler{
-		CacheHandler: ch,
-		CRDStatus: &k8s.CRDStatus{
-			Client: fake.NewSimpleClientset(),
-		},
+		IsLeader:        make(chan struct{}),
+		CacheHandler:    ch,
+		StatusClient:    statusCache,
 		Metrics:         ch.Metrics,
 		FieldLogger:     log,
 		Sequence:        make(chan int, 1),
 		HoldoffDelay:    time.Duration(rand.Intn(100)) * time.Millisecond,
 		HoldoffMaxDelay: time.Duration(rand.Intn(500)) * time.Millisecond,
+		Builder: dag.Builder{
+			Source: dag.KubernetesCache{
+				FieldLogger: log,
+			},
+		},
 	}
 
 	for _, opt := range opts {
 		opt(eh)
 	}
+
+	// Make this event handler win the leader election.
+	close(eh.IsLeader)
 
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	check(t, err)
@@ -124,6 +135,7 @@ func setup(t *testing.T, opts ...func(*contour.EventHandler)) (cache.ResourceEve
 	rh := &resourceEventHandler{
 		EventHandler:        eh,
 		EndpointsTranslator: et,
+		statusCache:         statusCache,
 	}
 
 	stop := make(chan struct{})
@@ -137,22 +149,28 @@ func setup(t *testing.T, opts ...func(*contour.EventHandler)) (cache.ResourceEve
 		done <- g.Run()
 	}()
 
-	return rh, &Contour{T: t, ClientConn: cc}, func() {
-		// close client connection
-		cc.Close()
+	return rh, &Contour{
+			T:           t,
+			ClientConn:  cc,
+			statusCache: statusCache,
+		}, func() {
+			// close client connection
+			cc.Close()
 
-		// stop server
-		close(stop)
+			// stop server
+			close(stop)
 
-		<-done
-	}
+			<-done
+		}
 }
 
-// resourceEventHandler composes a contour.Translator and a contour.EndpointsTranslator
+// resourceEventHandler composes a contour.EventHandler and a contour.EndpointsTranslator
 // into a single ResourceEventHandler type.
 type resourceEventHandler struct {
 	*contour.EventHandler
 	*contour.EndpointsTranslator
+
+	statusCache *k8s.StatusCacher
 }
 
 func (r *resourceEventHandler) OnAdd(obj interface{}) {
@@ -176,6 +194,15 @@ func (r *resourceEventHandler) OnUpdate(oldObj, newObj interface{}) {
 }
 
 func (r *resourceEventHandler) OnDelete(obj interface{}) {
+	// Delete this object from the status cache before we make
+	// the deletion visible.
+	switch obj.(type) {
+	case *ingressroutev1.IngressRoute:
+		r.statusCache.Delete(obj)
+	case *projcontour.HTTPProxy:
+		r.statusCache.Delete(obj)
+	}
+
 	switch obj.(type) {
 	case *v1.Endpoints:
 		r.EndpointsTranslator.OnDelete(obj)
@@ -213,9 +240,73 @@ type grpcStream interface {
 	Recv() (*v2.DiscoveryResponse, error)
 }
 
+type statusResult struct {
+	*Contour
+
+	Err  error
+	Have *projcontour.Status
+}
+
+// Equals asserts that the status result is not an error and matches
+// the wanted status exactly.
+func (s *statusResult) Equals(want projcontour.Status) *Contour {
+	s.T.Helper()
+
+	// We should never get an error fetching the status for an
+	// object, so make it fatal if we do.
+	if s.Err != nil {
+		s.T.Fatalf(s.Err.Error())
+	}
+
+	assert.Equal(s.T, want, *s.Have)
+	return s.Contour
+}
+
+// Like asserts that the status result is not an error and matches
+// non-empty fields in the wanted status.
+func (s *statusResult) Like(want projcontour.Status) *Contour {
+	s.T.Helper()
+
+	// We should never get an error fetching the status for an
+	// object, so make it fatal if we do.
+	if s.Err != nil {
+		s.T.Fatalf(s.Err.Error())
+	}
+
+	if len(want.CurrentStatus) > 0 {
+		assert.Equal(s.T,
+			projcontour.Status{CurrentStatus: want.CurrentStatus},
+			projcontour.Status{CurrentStatus: s.Have.CurrentStatus},
+		)
+	}
+
+	if len(want.Description) > 0 {
+		assert.Equal(s.T,
+			projcontour.Status{Description: want.Description},
+			projcontour.Status{Description: s.Have.Description},
+		)
+	}
+
+	return s.Contour
+}
+
 type Contour struct {
 	*grpc.ClientConn
 	*testing.T
+
+	statusCache *k8s.StatusCacher
+}
+
+// Status returns a statusResult object that can be used to assert
+// on object status fields.
+func (c *Contour) Status(obj interface{}) *statusResult {
+	s, err := c.statusCache.GetStatus(obj)
+
+	return &statusResult{
+		Contour: c,
+		Err:     err,
+		Have:    s,
+	}
 }
 
 func (c *Contour) Request(typeurl string, names ...string) *Response {
@@ -276,7 +367,9 @@ type Response struct {
 	*v2.DiscoveryResponse
 }
 
-func (r *Response) Equals(want *v2.DiscoveryResponse) {
+func (r *Response) Equals(want *v2.DiscoveryResponse) *Contour {
 	r.Helper()
 	assert.Equal(r.T, want, r.DiscoveryResponse)
+
+	return r.Contour
 }

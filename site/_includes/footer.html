@@ -7,7 +7,7 @@
             </div>
             <div class="col-xs-12 col-sm-6 col-lg-3 offset-lg-1">
                 <p><strong>{{ site.footer.cta_title }}</strong></p>
-                <a href="{{ site.footer.cta_url }}" class="btn btn-sm btn-primary btn-no-border">{{ site.footer.cta_text }}</a>
+                <a href="{{ site.footer.cta_url }}" class="btn btn-outline-light">{{ site.footer.cta_text }}</a>
             </div>
         </div>
     </div>
@@ -23,18 +23,18 @@
                       {% if link[1].fa_icon %}
                       <i class="{{ link[1].fa_icon }} fa-lg fa-fw mr-1"></i>
                       {% endif %}
-                      <a href="{{ link[1].url }}">{{ link[0] }}</a></li>
+                      <a href="{{ link[1].url }}" alt="{{ link[1].url }}">{{ link[0] }}</a></li>
                     {% endfor %}
                 </ul>
             </div>
             <div class="col-12 col-md-7 text-center text-md-right">
-              <a href="/" alt="Homepage"><img src="/img/{{ site.logo }}" class="logo" /></a>
+              <a href="/" aria-label="Contour homepage"><img src="/img/{{ site.logo }}" alt="Homepage" class="logo" /></a>
             </div>
         </div>
         <div class="row align-items-center">
           <div class="col copyright text-center text-md-right mt-4">
             &copy; {{ site.time | date: '%Y' }} {{ site.author }}.
-            <a href="{{ site.footer.vm-link }}" class="vm-logo">A VMware-backed project. <img src="/img/{{ site.vm_logo }}" /></a>
+            <a href="{{ site.footer.vm-link }}" class="vm-logo">A VMware-backed project. <img src="/img/{{ site.vm_logo }}" alt="VMware logo" /></a>
           </div>
         </div>
     </div>
@@ -57,7 +57,7 @@
 <script type="text/javascript">
 $(document).ready(function() {
     $('#toc').toc({
-        headers: 'h1, h2, h3',
+        headers: '{{page.toc}}',
         title: '',
         listType: 'ul',
     });
