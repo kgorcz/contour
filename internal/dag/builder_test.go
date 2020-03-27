@@ -60,7 +60,7 @@ func TestDAGInsert(t *testing.T) {
 		},
 		Type: v1.SecretTypeTLS,
 		Data: map[string][]byte{
-			"ca.crt":            []byte(""),
+			CACertificateKey:    []byte(""),
 			v1.TLSCertKey:       []byte(CERTIFICATE),
 			v1.TLSPrivateKeyKey: []byte(RSA_PRIVATE_KEY),
 		},
@@ -72,7 +72,7 @@ func TestDAGInsert(t *testing.T) {
 			Namespace: "default",
 		},
 		Data: map[string][]byte{
-			"ca.crt": []byte(CERTIFICATE),
+			CACertificateKey: []byte(CERTIFICATE),
 		},
 	}
 
@@ -2395,6 +2395,64 @@ func TestDAGInsert(t *testing.T) {
 		},
 	}
 
+	// proxy39broot is a valid TCPProxy which includes to another TCPProxy
+	proxy39broot := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "root",
+			Namespace: s1.Namespace,
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "www.example.com",
+				TLS: &projcontour.TLS{
+					Passthrough: true,
+				},
+			},
+			TCPProxy: &projcontour.TCPProxy{
+				Include: &projcontour.TCPProxyInclude{
+					Name:      "foo",
+					Namespace: s1.Namespace,
+				},
+			},
+		},
+	}
+
+	proxy39brootplural := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "root",
+			Namespace: s1.Namespace,
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "www.example.com",
+				TLS: &projcontour.TLS{
+					Passthrough: true,
+				},
+			},
+			TCPProxy: &projcontour.TCPProxy{
+				IncludesDeprecated: &projcontour.TCPProxyInclude{
+					Name:      "foo",
+					Namespace: s1.Namespace,
+				},
+			},
+		},
+	}
+
+	proxy39bchild := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "foo",
+			Namespace: s1.Namespace,
+		},
+		Spec: projcontour.HTTPProxySpec{
+			TCPProxy: &projcontour.TCPProxy{
+				Services: []projcontour.Service{{
+					Name: s1.Name,
+					Port: 8080,
+				}},
+			},
+		},
+	}
+
 	proxy40 := &projcontour.HTTPProxy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "foo",
@@ -2407,6 +2465,25 @@ func TestDAGInsert(t *testing.T) {
 					Port: 8080,
 				}},
 			},
+		},
+	}
+
+	// issue 2309, each route must have at least one service
+	proxy41 := &projcontour.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "missing-service",
+			Namespace: s1.Namespace,
+		},
+		Spec: projcontour.HTTPProxySpec{
+			VirtualHost: &projcontour.VirtualHost{
+				Fqdn: "missing-service.example.com",
+			},
+			Routes: []projcontour.Route{{
+				Conditions: []projcontour.Condition{{
+					Prefix: "/",
+				}},
+				Services: nil, // missing
+			}},
 		},
 	}
 
@@ -5264,6 +5341,47 @@ func TestDAGInsert(t *testing.T) {
 				},
 			),
 		},
+		"insert httpproxy w/tcpproxy w/include": {
+			objs: []interface{}{proxy39broot, proxy39bchild, s1},
+			want: listeners(
+				&Listener{
+					Port: 443,
+					VirtualHosts: virtualhosts(
+						&SecureVirtualHost{
+							VirtualHost: VirtualHost{
+								Name: "www.example.com",
+							},
+							TCPProxy: &TCPProxy{
+								Clusters: clusters(
+									service(s1),
+								),
+							},
+						},
+					),
+				},
+			),
+		},
+		// Issue #2218
+		"insert httpproxy w/tcpproxy w/include plural": {
+			objs: []interface{}{proxy39brootplural, proxy39bchild, s1},
+			want: listeners(
+				&Listener{
+					Port: 443,
+					VirtualHosts: virtualhosts(
+						&SecureVirtualHost{
+							VirtualHost: VirtualHost{
+								Name: "www.example.com",
+							},
+							TCPProxy: &TCPProxy{
+								Clusters: clusters(
+									service(s1),
+								),
+							},
+						},
+					),
+				},
+			),
+		},
 		"insert httpproxy w/ tcpproxy w/ includes valid child": {
 			objs: []interface{}{proxy38, proxy40, s1},
 			want: listeners(
@@ -5283,6 +5401,10 @@ func TestDAGInsert(t *testing.T) {
 					),
 				},
 			),
+		},
+		"insert httproxy w/ route w/ no services": {
+			objs: []interface{}{proxy41, s1},
+			want: listeners(), // expect empty, route is invalid so vhost is invalid
 		},
 		"insert httpproxy with pathPrefix include": {
 			objs: []interface{}{

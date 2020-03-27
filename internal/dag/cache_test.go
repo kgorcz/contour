@@ -22,6 +22,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/api/networking/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	serviceapis "sigs.k8s.io/service-apis/api/v1alpha1"
 )
 
 func TestKubernetesCacheInsert(t *testing.T) {
@@ -49,7 +50,7 @@ func TestKubernetesCacheInsert(t *testing.T) {
 				},
 				Type: v1.SecretTypeTLS,
 				Data: map[string][]byte{
-					"ca.crt":            []byte(""),
+					CACertificateKey:    []byte(""),
 					v1.TLSCertKey:       []byte(CERTIFICATE),
 					v1.TLSPrivateKeyKey: []byte(RSA_PRIVATE_KEY),
 				},
@@ -64,7 +65,7 @@ func TestKubernetesCacheInsert(t *testing.T) {
 				},
 				Type: v1.SecretTypeOpaque,
 				Data: map[string][]byte{
-					"ca.crt": []byte(CERTIFICATE_WITH_TEXT),
+					CACertificateKey: []byte(CERTIFICATE_WITH_TEXT),
 				},
 			},
 			want: true,
@@ -349,11 +350,143 @@ func TestKubernetesCacheInsert(t *testing.T) {
 			},
 			obj: &v1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
+					Name:      "secret",
+					Namespace: "default",
+				},
+				Type: v1.SecretTypeTLS,
+				Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
+			},
+			want: true,
+		},
+		"insert secret referenced by httpproxy via tls delegation": {
+			pre: []interface{}{
+				&projcontour.HTTPProxy{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "simple",
+						Namespace: "extra",
+					},
+					Spec: projcontour.HTTPProxySpec{
+						VirtualHost: &projcontour.VirtualHost{
+							TLS: &projcontour.TLS{
+								SecretName: "default/secret",
+							},
+						},
+					},
+				},
+				&projcontour.TLSCertificateDelegation{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "delegation",
+						Namespace: "default",
+					},
+					Spec: projcontour.TLSCertificateDelegationSpec{
+						Delegations: []projcontour.CertificateDelegation{{
+							SecretName: "secret",
+							TargetNamespaces: []string{
+								"extra",
+							},
+						}},
+					},
+				},
+			},
+			obj: &v1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "secret",
+					Namespace: "default",
+				},
+				Type: v1.SecretTypeTLS,
+				Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
+			},
+			want: true,
+		},
+		"insert secret referenced by httpproxy via wildcard tls delegation": {
+			pre: []interface{}{
+				&projcontour.HTTPProxy{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "simple",
+						Namespace: "extra",
+					},
+					Spec: projcontour.HTTPProxySpec{
+						VirtualHost: &projcontour.VirtualHost{
+							TLS: &projcontour.TLS{
+								SecretName: "default/secret",
+							},
+						},
+					},
+				},
+				&projcontour.TLSCertificateDelegation{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "delegation",
+						Namespace: "default",
+					},
+					Spec: projcontour.TLSCertificateDelegationSpec{
+						Delegations: []projcontour.CertificateDelegation{{
+							SecretName: "secret",
+							TargetNamespaces: []string{
+								"*",
+							},
+						}},
+					},
+				},
+			},
+			obj: &v1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "secret",
+					Namespace: "default",
+				},
+				Type: v1.SecretTypeTLS,
+				Data: secretdata(CERTIFICATE, RSA_PRIVATE_KEY),
+			},
+			want: true,
+		},
+		"insert certificate secret": {
+			obj: &v1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ca",
+					Namespace: "default",
+				},
+				Type: v1.SecretTypeOpaque,
+				Data: map[string][]byte{
+					CACertificateKey: []byte(CERTIFICATE),
+				},
+			},
+			// TODO(dfc) this should be false because the CA secret is
+			// not referenced, but computing its reference duplicates the
+			// work done rebuilding the dag so for the moment assume that
+			// any CA secret causes a rebuild.
+			want: true,
+		},
+		"insert certificate secret referenced by ingressroute": {
+			pre: []interface{}{
+				&ingressroutev1.IngressRoute{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "example-com",
+						Namespace: "default",
+					},
+					Spec: ingressroutev1.IngressRouteSpec{
+						VirtualHost: &projcontour.VirtualHost{
+							Fqdn: "example.com",
+						},
+						Routes: []ingressroutev1.Route{{
+							Match: "/",
+							Services: []ingressroutev1.Service{{
+								Name: "kuard",
+								Port: 8080,
+								UpstreamValidation: &projcontour.UpstreamValidation{
+									CACertificate: "ca",
+									SubjectName:   "example.com",
+								},
+							}},
+						}},
+					},
+				},
+			},
+			obj: &v1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
 					Name:      "ca",
 					Namespace: "default",
 				},
 				Data: map[string][]byte{
-					"ca.crt": []byte(CERTIFICATE),
+					CACertificateKey: []byte(CERTIFICATE),
 				},
 			},
 			want: true,
@@ -392,7 +525,7 @@ func TestKubernetesCacheInsert(t *testing.T) {
 				},
 				Type: v1.SecretTypeOpaque,
 				Data: map[string][]byte{
-					"ca.crt": []byte(CERTIFICATE),
+					CACertificateKey: []byte(CERTIFICATE),
 				},
 			},
 			want: true,
@@ -748,6 +881,42 @@ func TestKubernetesCacheInsert(t *testing.T) {
 			},
 			want: true,
 		},
+		"insert service-apis Gatewayclass": {
+			obj: &serviceapis.GatewayClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gatewayclass",
+					Namespace: "default",
+				},
+			},
+			want: true,
+		},
+		"insert service-apis Gateway": {
+			obj: &serviceapis.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway",
+					Namespace: "default",
+				},
+			},
+			want: true,
+		},
+		"insert service-apis HTTPRoute": {
+			obj: &serviceapis.HTTPRoute{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "httproute",
+					Namespace: "default",
+				},
+			},
+			want: true,
+		},
+		"insert service-apis TcPRoute": {
+			obj: &serviceapis.TcpRoute{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "tcproute",
+					Namespace: "default",
+				},
+			},
+			want: true,
+		},
 	}
 
 	for name, tc := range tests {
@@ -926,6 +1095,66 @@ func TestKubernetesCacheRemove(t *testing.T) {
 				},
 			},
 			want: false,
+		},
+		"remove service-apis Gatewayclass": {
+			cache: cache(&serviceapis.GatewayClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gatewayclass",
+					Namespace: "default",
+				},
+			}),
+			obj: &serviceapis.GatewayClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gatewayclass",
+					Namespace: "default",
+				},
+			},
+			want: true,
+		},
+		"remove service-apis Gateway": {
+			cache: cache(&serviceapis.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway",
+					Namespace: "default",
+				},
+			}),
+			obj: &serviceapis.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "gateway",
+					Namespace: "default",
+				},
+			},
+			want: true,
+		},
+		"remove service-apis HTTPRoute": {
+			cache: cache(&serviceapis.HTTPRoute{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "httproute",
+					Namespace: "default",
+				},
+			}),
+			obj: &serviceapis.HTTPRoute{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "httproute",
+					Namespace: "default",
+				},
+			},
+			want: true,
+		},
+		"remove service-apis TcpRoute": {
+			cache: cache(&serviceapis.TcpRoute{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "tcproute",
+					Namespace: "default",
+				},
+			}),
+			obj: &serviceapis.TcpRoute{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "tcproute",
+					Namespace: "default",
+				},
+			},
+			want: true,
 		},
 		"remove unknown": {
 			cache: cache("not an object"),
